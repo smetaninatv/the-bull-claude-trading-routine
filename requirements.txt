@@ -1,0 +1,7 @@
+ib_async>=1.0.0
+pandas>=2.0
+mplfinance>=0.12.10b0
+matplotlib>=3.7
+PyYAML>=6.0
+# Note: indicators are computed in plain pandas (lib/indicators.py) rather than
+# pandas-ta, because pandas-ta -> numba does not support Python 3.14 yet.

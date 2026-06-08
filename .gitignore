@@ -1,0 +1,26 @@
+# Secrets / credentials — never commit API keys, tokens, broker creds
+.env
+.env.*
+*.key
+secrets/
+credentials.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs / local data
+*.log
+data/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Generated output (charts + journal) — keep the folder, ignore contents
+output/*
+!output/.gitkeep

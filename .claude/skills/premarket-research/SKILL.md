@@ -1,0 +1,49 @@
+---
+name: premarket-research
+description: Pre-market research (~13:30 CET / 7:30 ET, Mon-Fri). Screens the watchlist + market for day and swing candidates, computes indicators, reads overnight news, and produces a ranked candidate list with charts, proposed entry/stop/target, and risk-checked sizing. Recommends only — places no orders.
+---
+
+# Pre-market research routine
+
+Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade candidates with charts and reasoning, before the US open.
+
+## Steps
+
+1. **Connect & set delayed data.**
+   ```python
+   from lib.ibkr import connect
+   from lib.data import set_delayed
+   ib = connect(); set_delayed(ib)
+   ```
+2. **Build the candidate universe.** Combine: (a) current **open positions** — `lib.ibkr.portfolio(ib)` — so you always research what you hold, persisting any new ones with `lib.config.add_to_watchlist([...])`; (b) `config/watchlist.txt` via `lib.config.load_watchlist()`; (c) screener hits: `lib.data.scan(ib, "TOP_PERC_GAIN")` and `scan(ib, "MOST_ACTIVE")` (skip gracefully if the scanner needs a subscription — note it and continue). Tag held names so their analysis covers managing the existing position, not just a fresh entry.
+3. **Pull data + indicators** for each candidate. Daily bars for swing: `lib.data.historical_bars(ib, sym, "1 Y", "1 day")` then `lib.indicators.add_indicators(df)`. Intraday for day: `lib.data.intraday_bars(ib, sym, "2 D", "5 mins")` then `lib.indicators.add_vwap(df)`. Load thresholds via `lib.config.load_strategy()`.
+4. **Apply the user's rule shortlist (hybrid).** These are the user's rules — apply them, don't substitute generic ones. Tag each candidate `day` or `swing`.
+
+   **Swing (daily chart):**
+   - **Macro trend filter — 200 SMA:** only go long when price is above `sma200` (uptrend). Skip / treat as short-bias if below.
+   - **Momentum/entry — 8 EMA:** favour names where price is holding above a rising `ema8`, or pulling back to the `ema8` and resuming — that's the entry trigger inside the larger 200 SMA trend.
+   - **Resistance breakout:** use `lib.indicators.find_resistance(df, lookback, tolerance_pct, min_touches)` (a level tested **≥2 times**), then `lib.indicators.is_breakout(df, level, confirm_pct)`. A fresh breakout of such a level — while above the 200 SMA and with 8 EMA momentum — is the strongest swing setup. Note the level and touch count in the rationale.
+
+   **Day (5-min chart):**
+   - **VWAP:** long bias when price is above session `vwap`; entries on a reclaim/hold of VWAP. Avoid longs trading below VWAP.
+   - **Volume floor:** require recent 5-min bar volume ≥ `day.min_bar_volume` (default 70k shares) — skip illiquid names.
+5. **Add judgment.** Check overnight/pre-market news for each shortlisted name (use web search). Note catalysts, earnings, or red flags. Down-rank anything with event risk that conflicts with the setup.
+6. **Propose levels & size.** For each pick set entry, stop (consider `lib.indicators.atr_stop`), target; size with `lib.config.position_size(entry, stop, style)`. Respect `limits` in `risk.yaml` (max positions, daily loss state).
+7. **Charts + journal.** For each pick: `lib.charts.save_chart(df, sym, date_str, entry=, stop=, target=)` and `lib.journal.append_note(...)` with the rule trigger + your reasoning + chart path. Use today's date string for `date_str`.
+8. **Report** to the user in TWO tables. **Place no orders** — this routine is research only.
+
+   **Table 1 — Pre-market snapshot** (this exact format; timestamp in market time / EST):
+
+   ```
+   PRE-MARKET DATA (as of HH:MM AM EST):
+   Symbol | Price    | Change | Volume      | Key Levels        | Suggested Buy
+   TSLA   | $245.30  | +2.1%  | High volume | R: $248, S: $242  | $242.50 (pullback to 8 EMA)
+   NVDA   | $892.50  | +3.8%  | Very high   | R: $900, S: $885  | $885.50 (breakout retest)
+   ```
+   - **Price/Change** = last pre-market vs prior close. **Volume** = qualitative (Low/Average/High/Very high) vs the name's norm.
+   - **Key Levels** = nearest Resistance (use `find_resistance`) and Support.
+   - **Suggested Buy** = the proposed entry price + a 2–3 word reason (e.g. "breakout > R", "pullback to 8 EMA", "VWAP reclaim").
+
+   **Table 2 — Trade plan** (the actionable risk detail): `symbol | style | entry | stop | target | shares | risk$ | thesis (1 line) | chart path`.
+
+Keep it tight: a handful of high-conviction names beats a long list.

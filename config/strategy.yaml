@@ -1,0 +1,29 @@
+# Signal/strategy parameters for candidate search. Tune freely.
+
+swing:
+  trend_sma: 200          # macro trend filter (price should be on the right side of it)
+  entry_ema: 8            # short-term momentum / entry timing
+  resistance:
+    lookback_bars: 60     # how far back to look for the resistance level
+    min_touches: 2        # level must be tested at least this many times
+    tolerance_pct: 1.0    # swing highs within this % count as the same level
+    breakout_confirm_pct: 0.0  # extra % above the level to confirm a breakout
+
+day:
+  timeframe: "5 mins"     # day-trade chart timeframe
+  use_vwap: true          # trade relative to session VWAP
+  min_bar_volume: 70000   # 5-min bar volume floor, in shares (liquidity/activity)
+
+exits:
+  trailing_lookback: 2    # 2-bar trailing stop: exit if price drops below the
+                          # lowest low of the last N candles (ratchets up only)
+  drop_forming: false     # true = trail off completed candles only
+  include_current: false  # 2-bar-low window: false = bars before the new-high bar
+  # Timeframe the trailing stop is measured on, per style:
+  swing_timeframe: "1 day"
+  day_timeframe: "5 mins"
+  # HOLD underwater positions — never realize a loss; only exit at breakeven+.
+  # WARNING: this removes downside protection. A held position can keep falling;
+  # the trailing stop then only protects GAINS, not losses. Set false to restore
+  # normal stop-loss behavior.
+  no_exit_at_loss: true

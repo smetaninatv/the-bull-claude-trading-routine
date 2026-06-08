@@ -1,0 +1,30 @@
+# Risk configuration. Tune these to your account and tolerance.
+# Position sizing:  shares = floor( (account_size * risk_pct/100) / abs(entry - stop) )
+# then capped so the position value never exceeds max_position_pct of the account.
+
+account:
+  size_usd: 10000           # live NetLiquidation ~€10000 (base currency EUR).
+                            # Used as a conservative USD sizing base: since 1 EUR > 1 USD,
+                            # the USD buying power is actually a bit higher, so positions are
+                            # slightly undersized (safe). Refine with the live EURUSD rate if desired.
+  data_mode: delayed        # delayed | realtime  (paper + delayed is free)
+
+# Shared guardrails (apply across the whole account):
+limits:
+  max_concurrent_positions: 5
+  max_position_pct: 20.0    # any single position capped at this % of account
+  daily_loss_limit_pct: 3.0 # if down this % on the day, stop proposing NEW entries (exits still run)
+  # HARD per-position loss floor, ALWAYS honored — even with no_exit_at_loss.
+  # This caps tail risk and is the stop used for position sizing, so risk-per-
+  # trade is real rather than fictional. Set the % to your max tolerable loss.
+  catastrophic_stop_pct: 8.0
+  pdt_min_equity_usd: 25000 # below this, US margin accounts face the PDT day-trade limit
+
+# Per-style risk:
+day_trading:
+  risk_per_trade_pct: 0.5
+  max_concurrent_positions: 3
+
+swing_trading:
+  risk_per_trade_pct: 1.0
+  max_hold_days: 10
