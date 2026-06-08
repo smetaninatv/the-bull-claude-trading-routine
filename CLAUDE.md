@@ -36,6 +36,7 @@ The full strategy (entries, sizing, exits) and a critical assessment live in **`
 - `lib/` — Python tools the skills call (importable package):
   - `ibkr.py` — connect, account value, positions, build bracket orders (un-transmitted), transmit after approval.
   - `data.py` — historical/intraday bars, watchlist loading, IBKR scanner screening.
+  - `screener.py` — Yahoo Finance (`yfinance`) candidate discovery (gainers/most-active/growth-tech screens) + historical-data fallback. Primary discovery source since the IBKR scanner times out on this Gateway. Bars match `data.py` format; IBKR stays source of truth for positions/orders.
   - `indicators.py` — EMA(8)/SMAs/RSI/MACD/ATR/session-VWAP in plain pandas (no pandas-ta — numba lacks Py 3.14 support), plus `find_resistance`/`is_breakout` for the swing breakout rule.
   - `charts.py` — annotated candlestick PNGs (indicator overlays + entry/exit markers) via `mplfinance`.
   - `journal.py` — append rationale to the markdown journal and log trades to SQLite.

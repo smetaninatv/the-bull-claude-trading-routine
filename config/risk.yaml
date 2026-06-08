@@ -3,7 +3,7 @@
 # then capped so the position value never exceeds max_position_pct of the account.
 
 account:
-  size_usd: 10000           # live NetLiquidation ~€10000 (base currency EUR).
+  size_usd: 47000           # live NetLiquidation ~€47,047 (base currency EUR).
                             # Used as a conservative USD sizing base: since 1 EUR > 1 USD,
                             # the USD buying power is actually a bit higher, so positions are
                             # slightly undersized (safe). Refine with the live EURUSD rate if desired.
