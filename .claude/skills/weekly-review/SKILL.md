@@ -18,5 +18,6 @@ Goal: turn a week of journal entries into lessons and concrete tweaks.
    - shortlist rules: thresholds to tighten/loosen.
    - `config/risk.yaml`: sizing or limit changes if warranted.
 6. **Write the review** to the journal and **report** it with charts and a short "focus for next week" list.
+7. **Update the monthly performance tracker (once per calendar month).** Check `lib.journal.perf_rows()`; if the latest snapshot is from a previous month (or it's the last Friday of the month), log a new one: `lib.journal.log_perf(<ISO ts>, <YYYY-MM-DD>, <current NetLiq>, <SPY close>, note=...)`, then `lib.journal.write_perf_report()` to refresh `output/performance.md`. Report the "am I on track?" line — cumulative return vs SPY vs the +1–2%/month target band. This is the honest scoreboard; don't skip it on a losing month.
 
 Frame everything against the plan: process quality first, P&L second.

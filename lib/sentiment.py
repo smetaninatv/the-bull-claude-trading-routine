@@ -181,9 +181,13 @@ def _label(mentions, rank, rank_prev, mentions_prev, bull_pct, news_score):
         bits.append(f"news {tone}")
 
     # Crowding caution: loud + euphoric is a late-stage tell, not a green light.
+    # A spike only counts as "loud" off a meaningful base (>=25 mentions) — a
+    # 1->3 jump is +200% but still noise, not a crowd. A top-10 WSB rank is loud
+    # on its own regardless of the delta.
     hot = mentions and (
         (rank and rank <= 10)
-        or (mentions_prev and (mentions - mentions_prev) / max(mentions_prev, 1) >= 1.0)
+        or (mentions >= 25 and mentions_prev
+            and (mentions - mentions_prev) / max(mentions_prev, 1) >= 1.0)
     )
     if hot and (bull_pct is None or bull_pct >= 70):
         flags.append("crowded/late")
