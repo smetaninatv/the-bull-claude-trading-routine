@@ -4,5 +4,6 @@ mplfinance>=0.12.10b0
 matplotlib>=3.7
 PyYAML>=6.0
 yfinance>=0.2.50   # free Yahoo Finance screeners + historical-data fallback (lib/screener.py)
+vaderSentiment>=3.3.2  # headline sentiment scoring (lib/sentiment.py); pure-Python, Py 3.14-safe
 # Note: indicators are computed in plain pandas (lib/indicators.py) rather than
 # pandas-ta, because pandas-ta -> numba does not support Python 3.14 yet.

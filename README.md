@@ -9,6 +9,7 @@ proposes orders; nothing is sent to IBKR until you approve.
 <img width="1916" height="1108" alt="image" src="https://github.com/user-attachments/assets/83070c33-2496-4068-94e6-efac82771d52" />
 
 
+
 | Routine | Skill | US Eastern | CET |
 |---|---|---|---|
 | Pre-market research | `/premarket-research` | 7:30 | ~13:30 |
