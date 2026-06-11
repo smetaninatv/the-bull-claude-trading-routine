@@ -15,8 +15,25 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
    from lib.data import set_delayed
    ib = connect(); set_delayed(ib)
    ```
-2. **Build the candidate universe.** Combine: (a) current **open positions** — `lib.ibkr.portfolio(ib)` — so you always research what you hold, persisting any new ones with `lib.config.add_to_watchlist([...])`; (b) `config/watchlist.txt` via `lib.config.load_watchlist()`; (c) **screener discovery** via Yahoo Finance (free, reliable): `lib.screener.discover(("gainers","most_active","growth_tech"), per=25)` — this is the primary discovery source since the IBKR scanner (`lib.data.scan`) tends to time out on this Gateway; try IBKR scan only as a bonus and skip gracefully. Tag held names so their analysis covers managing the existing position, not just a fresh entry.
-3. **Pull data + indicators** for each candidate. Daily bars for swing: `lib.data.historical_bars(ib, sym, "1 Y", "1 day")` then `lib.indicators.add_indicators(df)`. Intraday for day: `lib.data.intraday_bars(ib, sym, "2 D", "5 mins")` then `lib.indicators.add_vwap(df)`. **Data fallback:** if the IBKR connection is down or a symbol returns no data, use `lib.screener.yahoo_bars(sym, "1y", "1d")` (or `"5d","5m"` intraday) — same column format, feeds the indicators unchanged. Load thresholds via `lib.config.load_strategy()`.
+
+1b. **Day trade viability check.** Run this before building the full candidate universe so you can skip day-trade analysis on bad days:
+   ```python
+   from lib.realtime import day_trade_conditions, premarket_movers, webull_configured
+   dt = day_trade_conditions()
+   print(f"Day trade score: {dt['score']}/10 — {dt['verdict']}")
+   for note in dt['notes']:
+       print(f"  {note}")
+   ```
+   - **Score < 5:** Skip day trade candidates entirely. Note the reason (VIX too high / bearish tape). Proceed with swing research only.
+   - **Score >= 5:** Continue with day trade analysis.
+   - **Pre-market movers:** call `premarket_movers(top_n=10)` and add any high-volume gapper symbols to the candidate universe (Webull if configured, else yfinance). These are the best day trade setups — fresh catalysts.
+   - **Webull status:** `webull_configured()` returns True if `config/webull_creds.json` exists. Note in the report whether pre-market data came from Webull or yfinance fallback.
+
+2. **Build the candidate universe.** Combine: (a) current **open positions** — `lib.ibkr.portfolio(ib)` — so you always research what you hold, persisting any new ones with `lib.config.add_to_watchlist([...])`; (b) `config/watchlist.txt` via `lib.config.load_watchlist()`; (c) **screener discovery** via Yahoo Finance (free, reliable): `lib.screener.discover(("gainers","most_active","growth_tech"), per=25)` — this is the primary discovery source since the IBKR scanner (`lib.data.scan`) tends to time out on this Gateway; try IBKR scan only as a bonus and skip gracefully; (d) **pre-market movers** from step 1b (Webull/yfinance) — these go straight to the day trade shortlist. Tag held names so their analysis covers managing the existing position, not just a fresh entry.
+3. **Pull data + indicators** for each candidate.
+   - **Swing:** daily bars via `lib.data.historical_bars(ib, sym, "1 Y", "1 day")` (or `lib.screener.yahoo_bars` as fallback) then `lib.indicators.add_indicators(df)`.
+   - **Day trade:** use `lib.realtime.get_intraday_bars(sym, "5m")` — this is near-real-time (Webull if configured, else yfinance), replacing the 15-min delayed IBKR feed. Then `lib.indicators.add_vwap(df)`. Do **not** use `lib.data.intraday_bars()` for day trade decisions — it is delayed.
+   - Load thresholds via `lib.config.load_strategy()`.
 4. **Apply the user's rule shortlist (hybrid).** These are the user's rules — apply them, don't substitute generic ones. Tag each candidate `day` or `swing`.
 
    **Swing (daily chart):**

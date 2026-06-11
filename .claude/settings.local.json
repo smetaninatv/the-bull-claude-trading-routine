@@ -4,7 +4,10 @@
       "Bash(./.venv/Scripts/python.exe -c ' *)",
       "Skill(update-config)",
       "Skill(update-config:*)",
-      "Bash(python -c \"import json; d=json.load\\(open\\('.claude/settings.json'\\)\\); print\\('VALID, Bash allowed:', 'Bash' in d['permissions']['allow']\\)\")"
+      "Bash(python -c \"import json; d=json.load\\(open\\('.claude/settings.json'\\)\\); print\\('VALID, Bash allowed:', 'Bash' in d['permissions']['allow']\\)\")",
+      "WebSearch",
+      "Skill(schedule)",
+      "Skill(schedule:*)"
     ]
   }
 }

@@ -30,12 +30,25 @@ When `strategy.exits.no_exit_at_loss` is true (default), **never realize a loss*
 
 Because the laptop isn't always on, the protective stop must live as a **resting stop order at IBKR**, not just in this scan — so it protects the position between runs. Find the current resting stop via `lib.ibkr.open_orders(ib)`. The resting stop starts at the **catastrophic floor** (placed at entry) and never goes below it. Each scan: recompute the ratcheted 2-bar level; if it's **strictly higher** than the current resting stop **and >= average cost** (per the no-loss rule above), **AUTO-RAISE the stop order to the new level — no approval needed** (raising a protective stop only de-risks). **Never lower a stop.** If `price <= stop` and the exit would be at breakeven+, that's an exit: propose a close for approval (see below).
 
+## Day trade exits
+
+Day trades require intraday exit management — they use **5-min bars and a real-time price feed**, not daily bars. Two extra rules apply to day trades only:
+
+- **Near-close alert:** if a day trade position is still open with **≤ 15 minutes to the 4 PM ET close** (`lib.realtime.minutes_to_close() <= 15`), flag it as `MUST CLOSE` immediately regardless of the ratchet stop. Prepare a market order with `transmit=False` and present it for approval. Carrying a day trade overnight is not allowed unless the user explicitly converts it to a swing.
+- **Real-time bars:** for day trade stops, use `lib.realtime.get_intraday_bars(sym, "5m")` (Webull if configured, else yfinance near-real-time) instead of `lib.data.intraday_bars()` (15-min delayed).
+
 ## Steps
 
 1. **Connect** (`lib.ibkr.connect`) **& set delayed data**; load `lib.config.load_strategy()`.
+   ```python
+   from lib.realtime import get_intraday_bars, minutes_to_close
+   ```
 2. **Pull portfolio + open orders:** `lib.ibkr.portfolio(ib)` (gives avg cost + unrealized P&L per holding) and `lib.ibkr.open_orders(ib)` (existing resting stops). If flat, report it and stop. **Auto-add every held ticker to the watchlist** via `lib.config.add_to_watchlist([...])` so research covers them too.
 3. **For each holding:**
-   - Pull bars on the style's exit timeframe (with lead-in): swing → `lib.data.historical_bars(ib, sym, "15 D", "1 day")`; day → `lib.data.intraday_bars(ib, sym, "1 D", "5 mins")`.
+   - Determine style (swing or day) from the journal / position tag.
+   - Pull bars on the style's exit timeframe (with lead-in):
+     - **Swing:** `lib.data.historical_bars(ib, sym, "15 D", "1 day")` (delayed OK for daily bars).
+     - **Day:** `get_intraday_bars(sym, "5m")` — near-real-time via Webull/yfinance. Do NOT use `lib.data.intraday_bars()` for day trade exits.
    - Compute `stop = ratchet_2bar_stop(df, lookback, include_current)`; get current price; note `avg_cost` and unrealized P&L from the portfolio item.
    - **Underwater check (no_exit_at_loss):** if `price < avg_cost`, **HOLD** — no exit, no resting stop below cost. Report "underwater, holding."
    - Otherwise (breakeven+): **exit if `price <= stop`** (needs approval); else if the new stop is strictly above the resting stop **and >= avg_cost**, **auto-raise it now** (no approval). Report the stop level, the bars it came from, and the room above it.

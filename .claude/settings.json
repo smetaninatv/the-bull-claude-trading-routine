@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash",
-      "Read"
+      "Read",
+      "PowerShell"
     ]
   }
 }

@@ -9,8 +9,15 @@ Goal: turn approved candidates into live orders — human-in-the-loop. **Never t
 
 ## Steps
 
-1. **Connect & set delayed data** (`lib.ibkr.connect`, `lib.data.set_delayed`).
-   - **Delayed-data guard:** if `risk.account.data_mode` is `delayed` (free paper data is ~15 min late), **warn that DAY-trade signals are stale** — VWAP/volume off delayed quotes are unreliable intraday. Treat day trades as paper/learning only until a real-time subscription is active. Swing on delayed data is fine.
+1. **Connect + data setup.**
+   - Swing positions: `lib.ibkr.connect()`, `lib.data.set_delayed()` as usual — delayed data is fine for daily-bar swing entries.
+   - Day trade positions: use `lib.realtime` (near-real-time, no subscription needed):
+     ```python
+     from lib.realtime import day_trade_conditions, get_intraday_bars
+     dt = day_trade_conditions()
+     ```
+     If `dt["score"] < 5`: **do not open new day trades this session** — print the verdict and skip to swing-only processing. This replaces the old "warn and proceed anyway" behavior.
+     If `dt["score"] >= 5`: proceed with day trade validation using `get_intraday_bars(sym, "5m")` for VWAP/volume checks instead of the 15-min delayed IBKR feed.
 2. **Load this morning's candidates** from the journal / pre-market report. If none, say so and stop.
 3. **Re-validate at the open against the user's rules.** Pull fresh intraday bars (`lib.data.intraday_bars(ib, sym, "1 D", "5 mins")`); `lib.indicators.add_vwap(df)` for day names, `add_indicators(df)` for swing. Confirm:
    - *Day:* price **above session VWAP** and recent 5-min bar volume ≥ `strategy.day.min_bar_volume` (70k). Below VWAP or thin volume → drop.
