@@ -5,5 +5,13 @@ matplotlib>=3.7
 PyYAML>=6.0
 yfinance>=0.2.50   # free Yahoo Finance screeners + historical-data fallback (lib/screener.py)
 vaderSentiment>=3.3.2  # headline sentiment scoring (lib/sentiment.py); pure-Python, Py 3.14-safe
+pytz>=2023.3       # timezone conversion for market session detection (lib/realtime.py)
 # Note: indicators are computed in plain pandas (lib/indicators.py) rather than
 # pandas-ta, because pandas-ta -> numba does not support Python 3.14 yet.
+
+# Optional: Webull integration for real-time pre-market movers + intraday bars (lib/realtime.py).
+# Provides better pre-market data than yfinance. Requires config/webull_creds.json.
+# Setup: pip install webull
+#        python -c "import uuid; print(uuid.uuid4())"  # generate a device ID
+#        Create config/webull_creds.json: {"username": "email", "password": "pass", "did": "<uuid>"}
+# webull>=0.2.9

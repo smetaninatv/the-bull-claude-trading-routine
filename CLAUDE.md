@@ -17,6 +17,9 @@ The full strategy (entries, sizing, exits) and a critical assessment live in **`
 - **Decision style:** Hybrid — rules build the candidate shortlist and enforce risk limits; Claude adds judgment (news, context, chart read) before recommending.
 - **Universe:** core watchlist (`config/watchlist.txt`) + a pre-market screener (gainers/volume/gaps).
 - **Risk:** fixed % risk per trade, sized off stop distance; see `config/risk.yaml`. Sizing: `shares = (account × risk%) ÷ |entry − stop|`, capped by `max_position_pct`.
+- **Entry:** always use a limit order at the lowest realistic price — ATR-based pullback (0.5–1 ATR below close), 8 EMA pullback, or recent session low. Never enter at or above current market price.
+- **Target:** always set a limit sell at the highest credible predicted price (highest plausible analyst target or key resistance). Use `prepare_bracket()`, not `prepare_entry()`.
+- **Catastrophic stop:** optional (user-mandated, 2026-06-10). Always compute and offer it, but do not force it. Present as "include? yes/no" and build without it if user declines. Note open downside once when declining.
 - **Runtime:** user's laptop, **not always on** → routines are **assisted/manual trigger** (user runs the skill when present), not unattended cron. Don't assume a job fired on time.
 - **Market & timezone:** US equities (NYSE/Nasdaq, 9:30–16:00 ET). User is in **CET**. Anchor all schedule logic to US/Eastern and convert dynamically (US and EU DST shift on different dates).
 - **Output:** annotated charts + written rationale saved per run under `output/charts/<date>/`, plus a running trade journal (`output/journal.md` / `.db`). No live-streaming UI — charts are snapshots taken at decision time.
@@ -37,6 +40,7 @@ The full strategy (entries, sizing, exits) and a critical assessment live in **`
   - `ibkr.py` — connect, account value, positions, build bracket orders (un-transmitted), transmit after approval.
   - `data.py` — historical/intraday bars, watchlist loading, IBKR scanner screening.
   - `screener.py` — Yahoo Finance (`yfinance`) candidate discovery (gainers/most-active/growth-tech screens) + historical-data fallback. Primary discovery source since the IBKR scanner times out on this Gateway. Bars match `data.py` format; IBKR stays source of truth for positions/orders.
+  - `realtime.py` — near-real-time intraday data for day trading: `get_intraday_bars(sym, "5m")` (Webull if configured, else yfinance), `day_trade_conditions()` (VIX + SPY/QQQ VWAP → score 0–10 + verdict), `premarket_movers()` (Webull/yfinance gappers), `market_session()`, `minutes_to_close()`. Optional Webull integration via `config/webull_creds.json` (see requirements.txt). Replaces the 15-min delayed IBKR feed for all day-trade signal work.
   - `indicators.py` — EMA(8)/SMAs/RSI/MACD/ATR/session-VWAP in plain pandas (no pandas-ta — numba lacks Py 3.14 support), plus `find_resistance`/`is_breakout` for the swing breakout rule.
   - `charts.py` — annotated candlestick PNGs (indicator overlays + entry/exit markers) via `mplfinance`.
   - `journal.py` — append rationale to the markdown journal and log trades to SQLite.
