@@ -37,6 +37,23 @@ Day trades require intraday exit management — they use **5-min bars and a real
 - **Near-close alert:** if a day trade position is still open with **≤ 15 minutes to the 4 PM ET close** (`lib.realtime.minutes_to_close() <= 15`), flag it as `MUST CLOSE` immediately regardless of the ratchet stop. Prepare a market order with `transmit=False` and present it for approval. Carrying a day trade overnight is not allowed unless the user explicitly converts it to a swing.
 - **Real-time bars:** for day trade stops, use `lib.realtime.get_intraday_bars(sym, "5m")` (Webull if configured, else yfinance near-real-time) instead of `lib.data.intraday_bars()` (15-min delayed).
 
+## Day trade profit-lock (replaces catastrophic stop once triggered)
+
+Once a day trade is in profit **and** above VWAP, replace the resting catastrophic stop with a tighter VWAP-trailing stop that locks in the gain:
+
+**Trigger condition** (check each scan):
+- `price > avg_cost` (position is profitable), AND
+- `price > vwap + 0.5 × ATR` (meaningfully above VWAP, not just scraping it)
+
+**Action when triggered:**
+1. Compute `profit_lock = lib.indicators.vwap_trail_stop(df, buffer_atr_mult=0.5)` — this returns `VWAP − 0.5 × ATR`.
+2. If `profit_lock > current_resting_stop` → **auto-raise the resting stop to `profit_lock`** (no approval — it only de-risks, same as a normal stop raise).
+3. On subsequent scans, keep trailing: recompute `profit_lock` each time VWAP rises; raise the stop if the new level is strictly higher. **Never lower it.**
+
+This ensures a profitable day trade cannot reverse back to a loss. The catastrophic stop (8% floor) remains the hard minimum; the profit-lock operates above it.
+
+**Order verification (each scan):** Connectivity blips can silently cancel resting stop orders. At the start of each scan, cross-check the expected resting stop against `lib.ibkr.open_orders(ib)`. If the stop order is missing for an open position, **immediately flag it as `UNPROTECTED`** and re-place the stop at the last known level before doing anything else. Log the incident.
+
 ## Steps
 
 1. **Connect** (`lib.ibkr.connect`) **& set delayed data**; load `lib.config.load_strategy()`.
@@ -44,6 +61,7 @@ Day trades require intraday exit management — they use **5-min bars and a real
    from lib.realtime import get_intraday_bars, minutes_to_close
    ```
 2. **Pull portfolio + open orders:** `lib.ibkr.portfolio(ib)` (gives avg cost + unrealized P&L per holding) and `lib.ibkr.open_orders(ib)` (existing resting stops). If flat, report it and stop. **Auto-add every held ticker to the watchlist** via `lib.config.add_to_watchlist([...])` so research covers them too.
+   - **Order integrity check:** for every open position, verify a resting stop order exists. If a position has no resting stop, flag it as `UNPROTECTED` immediately, re-place the stop at the catastrophic floor (or last known profit-lock level if above cost), and report the re-placement before continuing.
 3. **For each holding:**
    - Determine style (swing or day) from the journal / position tag.
    - Pull bars on the style's exit timeframe (with lead-in):

@@ -81,6 +81,33 @@ def atr_stop(df, entry, mult=2.0, side="long"):
     return entry - mult * last_atr if side == "long" else entry + mult * last_atr
 
 
+def vwap_trail_stop(df, buffer_atr_mult=0.5):
+    """VWAP-based trailing stop for day trades (long).
+
+    Stop = VWAP - buffer_atr_mult × ATR(14). Requires a 'vwap' column
+    (add via add_vwap). Use once the position is in profit — it locks in
+    a floor below the session anchor and trails up as VWAP rises.
+    Only moves up: caller must enforce the up-only constraint.
+    """
+    if "vwap" not in df.columns:
+        raise ValueError("vwap_trail_stop: DataFrame has no 'vwap' column — call add_vwap() first")
+    vwap_now = float(df["vwap"].iloc[-1])
+    atr_val = float(atr(df["high"], df["low"], df["close"], 14).iloc[-1])
+    return round(vwap_now - buffer_atr_mult * atr_val, 2)
+
+
+def dollar_volume_ok(df, min_dv=5_000_000, lookback=3):
+    """True if the rolling average dollar volume over the last `lookback` bars
+    meets the minimum threshold.
+
+    Prefer this over a raw share-count floor — 70k shares means $35M/bar for
+    AMD ($500) but only $840k/bar for a $12 stock. $5M/bar filters both.
+    """
+    recent = df.tail(lookback)
+    avg_dv = float((recent["close"] * recent["volume"]).mean())
+    return avg_dv >= min_dv
+
+
 def trailing_low_stop(df, lookback=2, drop_forming=False):
     """2-bar (configurable) trailing stop for a LONG position.
 

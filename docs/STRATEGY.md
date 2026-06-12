@@ -16,7 +16,9 @@
 
 ### Entry — Day (5-min chart)
 1. **VWAP:** long bias when price is above session VWAP; entries on a reclaim/hold of VWAP.
-2. **Volume floor:** 5-min bar volume ≥ 70,000 shares.
+2. **Dollar volume:** 3-bar average dollar volume ≥ $5M per 5-min bar (`price × volume`). Replaces the raw 70k share floor — 70k shares is a different thing for a $10 stock vs a $500 stock. Mid-day (> 60 min after open): raise threshold to $8M.
+3. **EMA8 proximity:** price within 2% of EMA8. More than 2% below EMA8 = weakening momentum, flag but allow. More than 5% below = skip.
+4. **R:R:** at least 2.0 at market-open; at least 3.0 mid-day (thinner tape, higher edge required).
 
 ### Position sizing & risk (`config/risk.yaml`)
 - **Fixed fractional risk:** day 0.5% / swing 1.0% of account per trade, sized off stop distance: `shares = (account × risk%) / |entry − stop|`.
@@ -26,7 +28,8 @@
 
 ### Exits (`config/strategy.yaml`, `config/risk.yaml`)
 - **Hard catastrophic stop (floor):** placed at entry at −`catastrophic_stop_pct` (default 8%) from entry; **always rests at the broker and is always honored**, even under `no_exit_at_loss`. Sizing is done off THIS stop, so risk-per-trade is real.
-- **Ratcheting 2-bar trailing stop:** initial reference = lowest low of past 2 bars at entry; each new 2-bar high raises the stop to the 2-bar low; **only moves up**; exit when price hits it. Resting stop auto-raised once it reaches breakeven+ (no approval); exits need approval. No fixed take-profit — the trail runs the winner.
+- **Day trade profit-lock (new):** once a day trade is profitable AND price > VWAP + 0.5×ATR, the resting stop is raised from the catastrophic floor to `VWAP − 0.5×ATR`. This locks in a minimum gain and trails up automatically as VWAP rises. Auto-applied (no approval) — it only de-risks. Implemented in `lib.indicators.vwap_trail_stop()`.
+- **Ratcheting 2-bar trailing stop (swing):** initial reference = lowest low of past 2 bars at entry; each new 2-bar high raises the stop to the 2-bar low; **only moves up**; exit when price hits it. For day trades the profit-lock takes precedence once triggered; the 2-bar ratchet applies to swing positions on daily bars.
 - **Secondary safety exits:** swing close below 200 SMA; day loss of VWAP (suppressed while underwater per the rule below, but the catastrophic floor still applies).
 - **`no_exit_at_loss: true`** — don't exit on small dips/normal stops while underwater (hold and wait for recovery) — BUT bounded by the catastrophic floor, so max loss per position is capped.
 
@@ -65,7 +68,7 @@ A **catastrophic stop** (`risk.limits.catastrophic_stop_pct`, default −8%) is 
 
 **🟡 Resistance detection is an unvalidated heuristic.** `find_resistance` clusters swing highs — reasonable, but unproven. *Suggestion:* eyeball its output against real charts during paper trading before trusting it.
 
-**🟡 Absolute volume floor (70k) instead of relative.** 70k shares/5-min means different things for a $5 stock vs a $900 stock. *Suggestion:* consider **relative volume** (vs the name's average) or **dollar volume**.
+**✅ Volume floor upgraded to dollar volume.** The raw 70k share floor is replaced by a 3-bar average dollar volume check (≥ $5M/bar at open, ≥ $8M mid-day). Implemented in `lib.indicators.dollar_volume_ok()`.
 
 **🟡 Concentration / correlation.** 20% max single position and up to 5 swings with no sector limit means 5 correlated tech names = effectively one large bet. *Suggestion:* add a per-sector or correlation cap; 20% single-name is high.
 

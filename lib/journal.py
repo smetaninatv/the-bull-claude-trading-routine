@@ -47,14 +47,14 @@ def log_trade(ts, symbol, action, style, qty, entry, stop, target,
               status, rationale, chart_path=None):
     """Insert a trade row. `ts` must be an ISO timestamp from the caller."""
     c = _conn()
-    c.execute(
+    cur = c.execute(
         """INSERT INTO trades
            (ts, symbol, action, style, qty, entry, stop, target, status, rationale, chart_path)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (ts, symbol, action, style, qty, entry, stop, target, status, rationale, chart_path),
     )
     c.commit()
-    rid = c.lastrowid
+    rid = cur.lastrowid
     c.close()
     return rid
 

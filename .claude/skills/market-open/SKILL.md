@@ -20,7 +20,12 @@ Goal: turn approved candidates into live orders — human-in-the-loop. **Never t
      If `dt["score"] >= 5`: proceed with day trade validation using `get_intraday_bars(sym, "5m")` for VWAP/volume checks instead of the 15-min delayed IBKR feed.
 2. **Load this morning's candidates** from the journal / pre-market report. If none, say so and stop.
 3. **Re-validate at the open against the user's rules.** Pull fresh intraday bars (`lib.data.intraday_bars(ib, sym, "1 D", "5 mins")`); `lib.indicators.add_vwap(df)` for day names, `add_indicators(df)` for swing. Confirm:
-   - *Day:* price **above session VWAP** and recent 5-min bar volume ≥ `strategy.day.min_bar_volume` (70k). Below VWAP or thin volume → drop.
+   - *Day:* all four checks must pass — drop and say why if any fail:
+     1. **Above VWAP** — price > session VWAP.
+     2. **Dollar volume** — `lib.indicators.dollar_volume_ok(df, min_dv=5_000_000, lookback=3)` (3-bar avg ≥ $5M/bar). Replaces the raw 70k share floor, which is meaningless for high-price names and passes junk cheap stocks.
+     3. **EMA8 proximity** — price is within 2% of EMA8 (neither extended far above nor collapsed below). Flag but don't hard-drop if price is 2-4% below EMA8 — note it as "weak momentum."
+     4. **R:R ≥ 2.0** (market-open / first 30 min) or **R:R ≥ 3.0** if running mid-day (> 60 min after open — thinner tape, need a wider edge). Check `lib.realtime.market_session()` and `datetime` to determine.
+   - *Mid-day mode* (> 60 min after open): additionally require 3-bar avg dollar volume ≥ $8M (tighter than the base $5M — mid-day volume dries up and thin setups fail more often).
    - *Swing:* still **above 200 SMA**, 8 EMA momentum intact, and (for breakout entries) price holding above the broken resistance level rather than failing back under it **on expanding volume** (skip low-volume breakouts — they fail often).
    Drop invalidated names and say why.
 4. **Check account state & limits.** `lib.ibkr.equity(ib)`, current `positions(ib)`. Enforce `risk.yaml` limits: max concurrent positions, daily loss limit (if breached, propose no new entries).
