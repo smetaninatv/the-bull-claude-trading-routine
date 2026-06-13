@@ -81,19 +81,77 @@ def atr_stop(df, entry, mult=2.0, side="long"):
     return entry - mult * last_atr if side == "long" else entry + mult * last_atr
 
 
-def vwap_trail_stop(df, buffer_atr_mult=0.5):
+def intraday_atr(df, length=14):
+    """ATR(length) computed from an intraday OHLC DataFrame. Convenience wrapper
+    around atr() that takes the whole df. Returns the latest value as float."""
+    return float(atr(df["high"], df["low"], df["close"], length).iloc[-1])
+
+
+def noise_band(df, mult=1.5, length=14):
+    """The ATR-based 'noise band' width = mult × ATR(length).
+
+    A stop placed closer than this to entry will likely be triggered by normal
+    intraday wiggle. Use it to (a) reject stops that sit inside the band, and
+    (b) size the minimum stop distance. AMD 2026-06-12 lesson: a $2 stop on a
+    name with $2.5 5-min ATR is inside the noise — it got shaken out before the
+    real move. Default 1.5× = enough room for a routine pullback.
+    """
+    return round(mult * intraday_atr(df, length), 2)
+
+
+def vwap_trail_stop(df, buffer_atr_mult=1.5):
     """VWAP-based trailing stop for day trades (long).
 
     Stop = VWAP - buffer_atr_mult × ATR(14). Requires a 'vwap' column
-    (add via add_vwap). Use once the position is in profit — it locks in
-    a floor below the session anchor and trails up as VWAP rises.
-    Only moves up: caller must enforce the up-only constraint.
+    (add via add_vwap). Use as a FLOOR beneath the 2-bar ratchet, not as the
+    primary stop — the ratchet adapts to structure; this only holds while VWAP
+    holds as support. Only moves up: caller must enforce the up-only constraint.
+
+    Buffer default is 1.5×ATR (was 0.5×): AMD 2026-06-12 broke VWAP by 1.4×ATR
+    on a flush that immediately reversed and ran higher — a 0.5× buffer exited
+    at the worst point. 1.5× survives a normal VWAP undercut.
     """
     if "vwap" not in df.columns:
         raise ValueError("vwap_trail_stop: DataFrame has no 'vwap' column — call add_vwap() first")
     vwap_now = float(df["vwap"].iloc[-1])
     atr_val = float(atr(df["high"], df["low"], df["close"], 14).iloc[-1])
     return round(vwap_now - buffer_atr_mult * atr_val, 2)
+
+
+def day_trade_stop(df, current_resting_stop=None, vwap_buffer_atr=1.5, lookback=2,
+                   include_current=False):
+    """Combined day-trade trailing stop (long). PRIMARY = 2-bar ratchet;
+    VWAP-trail is only a FLOOR beneath it. Returns the stop to rest at IBKR.
+
+    Logic (AMD 2026-06-12 retro):
+      1. ratchet = strict-UP 2-bar ratchet (adapts to structure, best performer).
+      2. floor   = vwap_trail_stop (VWAP − vwap_buffer_atr×ATR).
+      3. candidate = max(ratchet, floor) — the ratchet leads; the VWAP floor only
+         lifts the stop when the ratchet is somehow below it, never lowers it.
+      4. Never lower an existing resting stop (up-only): the returned level is
+         max(candidate, current_resting_stop).
+
+    Requires a 'vwap' column (call add_vwap first). Pass bars from a short
+    lead-in before entry through now, on 5-min timeframe.
+    """
+    ratchet = ratchet_2bar_stop(df, lookback=lookback, include_current=include_current)
+    floor = vwap_trail_stop(df, buffer_atr_mult=vwap_buffer_atr)
+    candidate = max(ratchet, floor)
+    if current_resting_stop is not None:
+        candidate = max(candidate, float(current_resting_stop))
+    return round(candidate, 2)
+
+
+def dollar_volume_ok(df, min_dv=5_000_000, lookback=3):
+    """True if the rolling average dollar volume over the last `lookback` bars
+    meets the minimum threshold.
+
+    Prefer this over a raw share-count floor — 70k shares means $35M/bar for
+    AMD ($500) but only $840k/bar for a $12 stock. $5M/bar filters both.
+    """
+    recent = df.tail(lookback)
+    avg_dv = float((recent["close"] * recent["volume"]).mean())
+    return avg_dv >= min_dv
 
 
 def dollar_volume_ok(df, min_dv=5_000_000, lookback=3):
@@ -168,32 +226,72 @@ def ratchet_2bar_stop(df, lookback=2, include_current=False):
 
 # --- Swing rule: resistance line tested >= N times, then breakout ----------
 
-def find_resistance(df, lookback=60, tolerance_pct=1.0, min_touches=2):
-    """Find a horizontal resistance level touched >= min_touches times.
+def find_resistance(df, lookback=60, tolerance_pct=1.0, min_touches=2,
+                    wing=2, max_dist_pct=12.0, ref_price=None):
+    """Nearest *relevant* horizontal resistance: a level tested >= min_touches
+    times, clustered within tolerance_pct, restricted to within max_dist_pct of
+    the current price, and the one CLOSEST to price is returned. (None, 0) if no
+    qualifying level.
 
-    A 'touch' is a local swing high (a bar whose high >= its neighbours).
-    Swing highs within tolerance_pct of each other are treated as the same
-    level. Returns (level, touches); (None, 0) if no qualifying level.
+    Why "closest to price" and not "most touches": for a breakout setup the
+    meaningful ceiling is the level price is pressing against or has just cleared
+    — not a heavily-tested level far below that is really old support. The prior
+    implementation returned the globally most-touched pivot, which on a trending
+    name was a stale level far below price (breakout flags became useless — see
+    journal 2026-06-08). This filters to relevant levels and picks the nearest.
 
-    Heuristic starter implementation — tune via config/strategy.yaml.
+    A swing-high pivot is a bar whose high is the max of the [-wing, +wing]
+    window and which rose into that high (so a flat top counts as one touch, not
+    one per bar). Levels within tolerance_pct of each other are one cluster;
+    `touches` is the number of distinct pivots in the chosen cluster.
+    `ref_price` defaults to the last close.
     """
-    highs = df["high"].tail(lookback).reset_index(drop=True)
-    pivots = [highs[i] for i in range(1, len(highs) - 1)
-              if highs[i] >= highs[i - 1] and highs[i] >= highs[i + 1]]
+    sub = df.tail(lookback).reset_index(drop=True)
+    highs = sub["high"].to_numpy(dtype=float)
+    n = len(highs)
+    if n < 2 * wing + 1:
+        return None, 0
+    ref = float(ref_price) if ref_price is not None else float(sub["close"].iloc[-1])
+
+    # Swing-high pivots: local maxima over the wing window, deduped on plateaus
+    # by requiring a strict rise into the high.
+    pivots = []
+    for i in range(wing, n - wing):
+        window = highs[i - wing:i + wing + 1]
+        if highs[i] == window.max() and highs[i] > highs[i - 1]:
+            pivots.append(highs[i])
     if not pivots:
         return None, 0
-    best_level, best_touches = None, 0
-    for p in pivots:
-        band = [q for q in pivots if abs(q - p) / p <= tolerance_pct / 100.0]
-        if len(band) > best_touches:
-            best_touches, best_level = len(band), sum(band) / len(band)
-    if best_touches >= min_touches:
-        return best_level, best_touches
-    return None, 0
+
+    # Cluster pivots within tolerance_pct -> (level_mean, touches)
+    clusters, used = [], [False] * len(pivots)
+    for a in range(len(pivots)):
+        if used[a]:
+            continue
+        band = [pivots[a]]
+        used[a] = True
+        for b in range(a + 1, len(pivots)):
+            if not used[b] and abs(pivots[b] - pivots[a]) / pivots[a] <= tolerance_pct / 100.0:
+                band.append(pivots[b])
+                used[b] = True
+        clusters.append((sum(band) / len(band), len(band)))
+
+    # Keep clusters tested enough AND within max_dist_pct of price; pick nearest.
+    candidates = [(lvl, t) for (lvl, t) in clusters
+                  if t >= min_touches and abs(lvl - ref) / ref <= max_dist_pct / 100.0]
+    if not candidates:
+        return None, 0
+    level, touches = min(candidates, key=lambda lt: abs(lt[0] - ref))
+    return round(level, 2), touches
 
 
 def is_breakout(df, level, confirm_pct=0.0):
-    """True if the latest close has broken above `level` (by confirm_pct buffer)."""
+    """True if the latest close has broken above `level` (by confirm_pct buffer).
+
+    Pair with find_resistance, which now returns the NEAREST tested level — so a
+    True here means price has cleared the relevant ceiling (a real breakout/retest),
+    not that it sits far above some stale old level.
+    """
     if level is None:
         return False
     return float(df["close"].iloc[-1]) > level * (1 + confirm_pct / 100.0)

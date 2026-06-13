@@ -8,11 +8,29 @@ swing:
     min_touches: 2        # level must be tested at least this many times
     tolerance_pct: 1.0    # swing highs within this % count as the same level
     breakout_confirm_pct: 0.0  # extra % above the level to confirm a breakout
+    wing: 2               # swing-high pivot = max of [-wing, +wing] window
+    max_dist_pct: 12.0    # only consider resistance within this % of price; return
+                          # the NEAREST qualifying level (not the most-touched one),
+                          # so trending names don't get a stale far-below level
 
 day:
   timeframe: "5 mins"     # day-trade chart timeframe
   use_vwap: true          # trade relative to session VWAP
-  min_bar_volume: 70000   # 5-min bar volume floor, in shares (liquidity/activity)
+  min_bar_volume: 70000   # DEPRECATED raw share floor — kept for reference only
+  min_dollar_volume: 5000000        # 3-bar avg dollar volume floor ($/bar) at open
+  min_dollar_volume_midday: 8000000 # > 60 min after open: thinner tape, higher bar
+  ema8_max_below_pct: 2.0    # flag if price > this % below EMA8; skip if > 5%
+  min_rr_open: 2.0           # minimum reward:risk in the first 60 min
+  min_rr_midday: 3.0         # minimum reward:risk after 60 min (need wider edge)
+  trend_day_score: 8         # day_trade_conditions score >= this = trend day:
+                             #   NO fixed target (trail only) + enable post-stop re-entry
+  noise_band_atr_mult: 1.5   # min stop distance = this × 5-min ATR (avoid shakeouts)
+
+orders:
+  # Management of UNFILLED resting entry orders (market-open step 1c, exit-scan 4c).
+  stale_entry_sessions: 3            # cancel-recommend an entry resting unfilled this many sessions
+  cancel_unfilled_before_weekend: true  # Fri last scan: flag every unfilled entry for keep/cancel
+                                        # (avoid a Monday gap filling a stale limit into weakness)
 
 exits:
   trailing_lookback: 2    # 2-bar trailing stop: exit if price drops below the
@@ -22,6 +40,10 @@ exits:
   # Timeframe the trailing stop is measured on, per style:
   swing_timeframe: "1 day"
   day_timeframe: "5 mins"
+  # Day-trade stop: 2-bar ratchet is PRIMARY; VWAP-trail is a FLOOR beneath it.
+  # (AMD 2026-06-12: VWAP-trail alone exited at the bottom of a flush that reversed.)
+  day_vwap_buffer_atr: 1.5     # VWAP floor = VWAP − this × ATR (was 0.5, too tight)
+  day_post_stop_reentry: true  # on a trend day, scan for VWAP-reclaim re-entry after a stop
   # HOLD underwater positions — never realize a loss; only exit at breakeven+.
   # WARNING: this removes downside protection. A held position can keep falling;
   # the trailing stop then only protects GAINS, not losses. Set false to restore

@@ -74,14 +74,27 @@ def portfolio(ib):
     return ib.portfolio()
 
 
-def open_orders(ib):
+def open_orders(ib, settle=1.0, retries=2):
     """All open orders as Trade objects (contract + order + orderStatus).
 
-    Used to find the current resting stop order so the exit scan can raise it
-    (and to avoid double-sending).
+    Used to find the current resting stop/target orders so the exit scan can
+    raise them (and to avoid double-sending).
+
+    On this Gateway `ib.openTrades()` frequently comes back EMPTY if read
+    immediately — `reqAllOpenOrders()` is async and the response needs a moment
+    to populate over the event loop. A single empty read was falsely flagging
+    every position UNPROTECTED (2026-06-12). So: request, wait `settle` seconds,
+    and retry up to `retries` times before trusting an empty result. A genuinely
+    flat book still returns [] after the retries.
     """
-    ib.reqAllOpenOrders()
-    return list(ib.openTrades())
+    trades = []
+    for _ in range(retries + 1):
+        ib.reqAllOpenOrders()
+        ib.sleep(settle)
+        trades = list(ib.openTrades())
+        if trades:
+            return trades
+    return trades
 
 
 def qualify(ib, symbol, exchange="SMART", currency="USD"):
