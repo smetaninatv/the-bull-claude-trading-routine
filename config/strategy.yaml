@@ -25,6 +25,11 @@ day:
   trend_day_score: 8         # day_trade_conditions score >= this = trend day:
                              #   NO fixed target (trail only) + enable post-stop re-entry
   noise_band_atr_mult: 1.5   # min stop distance = this × 5-min ATR (avoid shakeouts)
+  # Entry price discipline (AMD 2026-06-15: bought $5/0.25xATR above VWAP, faded).
+  # Entry is a NON-marketable limit at the pullback level — buy the dip, never chase.
+  entry_limit_vwap_buffer_atr: 0.1  # entry limit = VWAP + this × ATR (just above VWAP)
+  max_entry_above_vwap_atr: 0.2     # if price is already >this×ATR above VWAP, don't enter
+                                    # (wait for pullback to the limit, or skip — no chasing)
 
 orders:
   # Management of UNFILLED resting entry orders (market-open step 1c, exit-scan 4c).

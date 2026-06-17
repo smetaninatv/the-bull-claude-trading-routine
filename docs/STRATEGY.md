@@ -19,12 +19,16 @@
 2. **Dollar volume:** 3-bar average dollar volume ≥ $5M per 5-min bar (`price × volume`). Replaces the raw 70k share floor — 70k shares is a different thing for a $10 stock vs a $500 stock. Mid-day (> 60 min after open): raise threshold to $8M.
 3. **EMA8 proximity:** price within 2% of EMA8. More than 2% below EMA8 = weakening momentum, flag but allow. More than 5% below = skip.
 4. **R:R:** at least 2.0 at market-open; at least 3.0 mid-day (thinner tape, higher edge required).
+5. **Entry price discipline — no chasing (added 2026-06-15).** The entry is a **non-marketable limit at the pullback level** (`VWAP + entry_limit_vwap_buffer_atr × ATR`, default 0.1×ATR — just above VWAP), NOT a marketable limit at the current price. If price is already more than `max_entry_above_vwap_atr × ATR` (default 0.2×) above VWAP, the move has run → don't chase; wait for the pullback to the limit or skip. *Why:* AMD 2026-06-15 was bought at $553.57 (marketable) when VWAP was $548 — ~$5 / 0.25×ATR above → overpaid, then faded. Trade-off: some setups won't fill (a missed trade beats an overpaid one).
+
+### Day-trade stock selection (`lib/daytrade.py`, added 2026-06-15)
+Beyond the entry gates above, candidates are ranked by `lib.daytrade.scan()` on the signals that actually pick intraday winners — **RVOL** (relative volume vs the stock's own norm; the single best "is this the right stock today" metric, >2-3 = active/hot), **daily ATR%** (juice; ~2-8% sweet spot), **above-VWAP**, **Opening-Range Breakout** (first-15-min high break), **relative strength vs SPY** (leadership), and **gap%**. Each name gets a 0-10 score + notes. RSI/MACD/Bollinger are deliberately excluded — they lag on 5-min bars and misfire intraday. Lead the shortlist with high-RVOL leaders that also pass the entry gates, not just the biggest gappers.
 
 ### Position sizing & risk (`config/risk.yaml`)
-- **Fixed fractional risk:** day 0.5% / swing 1.0% of account per trade, sized off stop distance: `shares = (account × risk%) / |entry − stop|`.
-- **Max single position:** 20% of account (cap).
+- **Swing — fixed fractional:** 1.0% of account risked per trade, sized off stop distance; capped at 20% of account.
+- **Day — own higher %s (user-set 2026-06-15):** risk **`day_trading.risk_per_trade_pct` 1.3%** (~$600 @ $47k) and capital cap **`day_trading.max_position_pct` 43%** (~$20k). `shares = min(risk% × account / |entry−stop|, max_position_pct% × account / entry)`. Tight stop (~2-3%) → hits the 43% capital cap (~$20k deployed); wide stop (~5%) → trims to hold the 1.3% risk cap. All percentages of account (no hardcoded $) — scales if the account changes. Overrides the global 20% cap for day trades only.
 - **Max concurrent positions:** day 3 / swing 5.
-- **Daily loss limit:** 3% → stop opening new trades for the day.
+- **Daily loss limit:** 3% (~$1,400) → stop opening new trades for the day. (≈ two max-loss day trades, so a couple of $600 losers ends day-trading for the session — the backstop on the bigger size.)
 
 ### Exits (`config/strategy.yaml`, `config/risk.yaml`)
 - **Hard catastrophic stop (floor):** placed at entry at −`catastrophic_stop_pct` (default 8%) from entry; **always rests at the broker and is always honored**, even under `no_exit_at_loss`. Sizing is done off THIS stop, so risk-per-trade is real.

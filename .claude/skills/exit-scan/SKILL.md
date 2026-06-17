@@ -28,7 +28,7 @@ Scanning a day trade *faster* than ~5 min buys nothing — the 2-bar ratchet lev
 - **Ratchet:** each time a bar makes a **new 2-bar high** (its high > the highs of the prior 2 bars), move the stop **up** to the lowest low of the past 2 bars.
 - **Stop only moves UP, never down.** **Exit when price hits the stop** (`price <= stop`).
 
-Recompute deterministically each scan with `lib.indicators.ratchet_2bar_stop(df, lookback, include_current)` — pass bars from a short lead-in before entry through now, so the full ratchet path replays without stored state. Timeframe by style (`strategy.exits`): **swing → daily**, **day → 5-min**. Lookback = `exits.trailing_lookback` (default 2). (Shorts: mirror with highs/`trailing_high_stop`.)
+Recompute deterministically each scan with `lib.indicators.ratchet_2bar_stop(df, lookback, include_current)` — pass bars from a short lead-in before entry through now, so the full ratchet path replays without stored state. Timeframe by style (`strategy.exits`): **swing → daily**, **day → 5-min**. Lookback = `exits.trailing_lookback` (default 2). (Strategy is long-only; a short would mirror the ratchet with highs.)
 
 > **Window ambiguity to confirm with the user:** "lowest low of the past 2 bars" can mean the 2 bars *before* the new-high bar (`include_current=False`, default) or the 2 most recent bars *including* it (`include_current=True`, tighter). Default is the former, for consistency with the new-high trigger's "past 2 bars".
 

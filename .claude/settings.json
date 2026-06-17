@@ -3,7 +3,10 @@
     "allow": [
       "Bash",
       "Read",
-      "PowerShell"
+      "PowerShell",
+      "Edit(/.claude/skills/market-open/**)",
+      "Edit(/.claude/skills/premarket-research/**)",
+      "Edit(/.claude/skills/exit-scan/**)"
     ]
   }
 }

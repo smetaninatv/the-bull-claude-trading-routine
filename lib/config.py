@@ -65,8 +65,15 @@ def catastrophic_stop(entry, side="long", risk=None):
 def position_size(entry, stop, style="swing", risk=None):
     """Return integer share count for a trade, risk-checked and capped.
 
-    shares = (account * risk_pct/100) / |entry - stop|, then capped so the
-    position value <= max_position_pct of the account.
+    shares = min(risk_budget / |entry-stop|, capital_cap / entry), floored.
+
+    All limits are PERCENTAGES of `account.size_usd` (no hardcoded $ amounts):
+      - risk_budget = account × `<style>.risk_per_trade_pct`%  (max loss if stop hits)
+      - capital_cap = account × `<style>.max_position_pct`% if set, else the global
+        `limits.max_position_pct`%.
+    So a tight stop hits the capital cap (deploys near max_position_pct); a wide
+    stop trims the position to hold the risk cap. Day trades carry their own
+    higher caps (risk 1.3% / position 43%); swings use 1% risk + the global 20% cap.
 
     IMPORTANT: pass the stop that will actually be HONORED. With no_exit_at_loss
     on, the only enforced downside stop is the catastrophic floor, so size off
@@ -75,13 +82,16 @@ def position_size(entry, stop, style="swing", risk=None):
     risk = risk or load_risk()
     account = float(risk["account"]["size_usd"])
     style_key = "day_trading" if style.startswith("day") else "swing_trading"
-    risk_pct = float(risk[style_key]["risk_per_trade_pct"])
-    cap_pct = float(risk["limits"]["max_position_pct"])
+    cfg = risk.get(style_key, {})
 
     per_share_risk = abs(float(entry) - float(stop))
     if per_share_risk <= 0:
         raise ValueError("entry and stop must differ")
 
-    raw = (account * risk_pct / 100.0) / per_share_risk
-    cap_shares = (account * cap_pct / 100.0) / float(entry)
+    risk_budget = account * float(cfg.get("risk_per_trade_pct", 0.5)) / 100.0
+    cap_pct = float(cfg.get("max_position_pct", risk["limits"]["max_position_pct"]))
+    cap_value = account * cap_pct / 100.0
+
+    raw = risk_budget / per_share_risk
+    cap_shares = cap_value / float(entry)
     return max(0, math.floor(min(raw, cap_shares)))

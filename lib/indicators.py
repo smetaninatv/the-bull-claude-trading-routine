@@ -154,38 +154,45 @@ def dollar_volume_ok(df, min_dv=5_000_000, lookback=3):
     return avg_dv >= min_dv
 
 
-def dollar_volume_ok(df, min_dv=5_000_000, lookback=3):
-    """True if the rolling average dollar volume over the last `lookback` bars
-    meets the minimum threshold.
+def atr_pct(df, length=14):
+    """ATR as a % of the latest close — the stock's intraday 'juice'.
 
-    Prefer this over a raw share-count floor — 70k shares means $35M/bar for
-    AMD ($500) but only $840k/bar for a $12 stock. $5M/bar filters both.
+    Day-trade names usually want >~2% to be worth the spread and give a trade
+    room to move. Too low = it won't travel; too high (>~10%) = erratic, wide
+    stops. Sweet spot ~2-8%.
     """
-    recent = df.tail(lookback)
-    avg_dv = float((recent["close"] * recent["volume"]).mean())
-    return avg_dv >= min_dv
+    a = float(atr(df["high"], df["low"], df["close"], length).iloc[-1])
+    last = float(df["close"].iloc[-1])
+    return round(a / last * 100, 2) if last else 0.0
 
 
-def trailing_low_stop(df, lookback=2, drop_forming=False):
-    """2-bar (configurable) trailing stop for a LONG position.
+def opening_range(df, minutes=15, session_open="09:30"):
+    """High/low of the first `minutes` of the regular session (the Opening Range).
 
-    Stop level = the lowest low of the last `lookback` candles, recomputed each
-    scan. In an uptrend it trails UP as higher candles print; on a pullback the
-    2-bar low can tick down (it is not a strictly monotonic ratchet — that is
-    inherent to a "last N candle lows" stop). Exit when price drops below it.
-
-    drop_forming=True ignores the most recent (possibly still-forming) bar and
-    trails off the last `lookback` *completed* candles instead.
+    df must be an INTRADAY DataFrame with a tz-aware DatetimeIndex (US/Eastern).
+    Uses the most recent day in df. Returns (or_high, or_low); (None, None) if
+    the opening-range window hasn't formed yet.
     """
-    lows = df["low"].iloc[:-1] if drop_forming else df["low"]
-    return float(lows.tail(lookback).min())
+    import datetime as _dt
+    if df is None or df.empty:
+        return None, None
+    day = df.index[-1].date()
+    oh, om = (int(x) for x in session_open.split(":"))
+    start = _dt.time(oh, om)
+    end_total = oh * 60 + om + minutes
+    end = _dt.time(end_total // 60, end_total % 60)
+    win = df[df.index.map(lambda t: t.date() == day and start <= t.time() < end)]
+    if win.empty:
+        return None, None
+    return round(float(win["high"].max()), 2), round(float(win["low"].min()), 2)
 
 
-def trailing_high_stop(df, lookback=2, drop_forming=False):
-    """Mirror of trailing_low_stop for a SHORT position: highest high of the
-    last `lookback` candles. Exit when price rises above it."""
-    highs = df["high"].iloc[:-1] if drop_forming else df["high"]
-    return float(highs.tail(lookback).max())
+def is_orb_breakout(df, or_high, confirm_pct=0.0):
+    """True if the latest close has broken above the opening-range high (Opening
+    Range Breakout) by an optional confirm buffer."""
+    if or_high is None:
+        return False
+    return float(df["close"].iloc[-1]) > or_high * (1 + confirm_pct / 100.0)
 
 
 def ratchet_2bar_stop(df, lookback=2, include_current=False):

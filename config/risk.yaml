@@ -20,11 +20,16 @@ limits:
   catastrophic_stop_pct: 8.0
   pdt_min_equity_usd: 25000 # below this, US margin accounts face the PDT day-trade limit
 
-# Per-style risk:
+# Per-style risk (all relative to account.size_usd — no hardcoded $ amounts):
 day_trading:
-  risk_per_trade_pct: 0.5
+  # Day-trade sizing (user-set 2026-06-15). Position auto-trims to honor BOTH:
+  #   shares = min( risk%/100 * account / |entry-stop|,  max_position_pct/100 * account / entry )
+  # Tight stop -> hits the capital cap (~max_position_pct); wide stop -> trims to hold the risk cap.
+  risk_per_trade_pct: 1.5      # max loss per day trade, % of account (~$600 @ $47k)
+  max_position_pct: 50         # max capital per day trade, % of account (~$20k @ $47k);
+                               # overrides the global 20% cap FOR DAY TRADES ONLY
   max_concurrent_positions: 3
 
 swing_trading:
-  risk_per_trade_pct: 1.0
+  risk_per_trade_pct: 1.0      # uses the global max_position_pct (20%) cap
   max_hold_days: 10
