@@ -12,20 +12,6 @@ automatically.
 
 ---
 
-## The logic in one minute
-
-The whole system rests on five simple ideas:
-
-1. **Trade with the trend, not against it.** Only go long when the bigger trend is up (price above its long moving average). Don't fight the tape.
-2. **Time the entry on a pullback or a breakout** — buy a dip toward support or a push through resistance, never chase a price that's already run.
-3. **Size every trade by how much you'd lose if wrong**, not by gut feel. Each trade risks a fixed small % of the account, measured from the entry to a hard stop.
-4. **Cap the loss, let the winner run.** A hard "catastrophic" stop caps the downside; a *trailing* stop follows a winning trade up and only exits when the move actually turns — no fixed profit target to cap the upside.
-5. **A human approves every entry and every exit.** The computer finds setups, does the math, and pre-builds the orders — but you decide. (The only thing it does on its own is *tighten* a stop, which can only reduce risk.)
-
-Everything below is just these five ideas applied to two time horizons.
-
----
-
 ## Two styles: swing vs. intraday
 
 | | **Swing** | **Intraday (day trade)** |
