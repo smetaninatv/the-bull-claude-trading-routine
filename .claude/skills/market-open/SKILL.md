@@ -9,6 +9,8 @@ Goal: turn approved candidates into live orders — human-in-the-loop. **Never t
 
 ## Steps
 
+0. **Market-holiday / weekend guard — check FIRST.** Call `lib.realtime.market_session()`. If it returns `"holiday"`, the US market is **closed today** — **STOP**: tell the user "🛑 Market closed today — *<lib.realtime.is_market_holiday()>*; next session *<lib.realtime.next_trading_day()>*" and do **not** run any holdings review, validation, or order building (there is no live session; prices/VWAP are stale). For scheduled auto-runs, also skip on a `"closed"` weekend. Only proceed when `session` is `"open"` (or `"pre"` right at the open).
+
 1. **Connect + data setup.**
    - Swing positions: `lib.ibkr.connect()`, `lib.data.set_delayed()` as usual — delayed data is fine for daily-bar swing entries.
    - Day trade positions: use `lib.realtime` (near-real-time, no subscription needed):

@@ -9,6 +9,16 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
 
 ## Steps
 
+0. **Market-holiday / weekend guard — check FIRST, before anything else.**
+   ```python
+   from lib.realtime import market_session, is_market_holiday, next_trading_day
+   sess = market_session()
+   if sess == "holiday":
+       hol = is_market_holiday()
+       print(f"MARKET CLOSED today — {hol}. Next session: {next_trading_day():%a %b %d}.")
+   ```
+   If `market_session()` is `"holiday"`, the US market is **closed today** — **STOP the routine**. Tell the user plainly: "🛑 Market closed today — *<holiday>*; next session *<date>*." Do **NOT** run the scan, tape read, or candidate analysis: `day_trade_conditions()` returns score 0 on a holiday, and any yfinance "movers"/prices are **stale carry-over** that will mislead. (For scheduled auto-runs, also skip silently on a `"closed"` weekend.) Only continue when a real pre/open session is pending.
+
 1. **Connect & set delayed data.**
    ```python
    from lib.ibkr import connect

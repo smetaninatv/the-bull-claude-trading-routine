@@ -7,6 +7,8 @@ description: Exit scan — hourly for swing positions, every 5–15 min for day 
 
 Goal: maintain a **ratcheting 2-bar trailing stop** on each position and exit when it's hit — human-in-the-loop.
 
+> **Market-holiday guard — check FIRST.** Call `lib.realtime.market_session()`. If it returns `"holiday"`, the US market is **closed today** — there is no live tape and no bars print, so the ratchet/scan has nothing to do. Note "🛑 Market closed — *<holiday>*; resting stops stay in place, next session *<next_trading_day>*" and **skip the scan** (your protective stops still rest at IBKR and fire on the next session). Resume normal cadence on the next trading day.
+
 ## Cadence — how often to run
 
 The real downside protection is the **stop order resting at IBKR**, which fires instantly between scans regardless of when this runs. The scan's job is to **raise** that stop (ratchet up), detect re-entry, and run safety exits — so cadence controls how *current* the trailed stop is, not whether you're protected.
