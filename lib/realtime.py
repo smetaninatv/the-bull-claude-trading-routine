@@ -8,6 +8,7 @@ Optional: Webull — pre-market movers + deeper intraday data. Requires credenti
 
 Falls back to yfinance silently if Webull is not configured or unavailable.
 """
+import datetime
 import json
 import os
 import warnings
@@ -23,16 +24,114 @@ _CREDS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "webull_cr
 
 
 # ---------------------------------------------------------------------------
+# US market holiday calendar (NYSE/Nasdaq full closures)
+# ---------------------------------------------------------------------------
+
+def _easter(year):
+    """Gregorian Easter Sunday (Anonymous/Meeus algorithm) — anchors Good Friday."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    ll = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * ll) // 451
+    month = (h + ll - 7 * m + 114) // 31
+    day = ((h + ll - 7 * m + 114) % 31) + 1
+    return datetime.date(year, month, day)
+
+
+def _observed(d):
+    """NYSE observance: a holiday on Saturday -> preceding Friday; Sunday -> Monday."""
+    if d.weekday() == 5:
+        return d - datetime.timedelta(days=1)
+    if d.weekday() == 6:
+        return d + datetime.timedelta(days=1)
+    return d
+
+
+def _nth_weekday(year, month, weekday, n):
+    """nth `weekday` (Mon=0) of a month, e.g. 3rd Monday of January."""
+    first = datetime.date(year, month, 1)
+    offset = (weekday - first.weekday()) % 7
+    return first + datetime.timedelta(days=offset + 7 * (n - 1))
+
+
+def _last_weekday(year, month, weekday):
+    """Last `weekday` (Mon=0) of a month, e.g. last Monday of May."""
+    if month == 12:
+        last = datetime.date(year, 12, 31)
+    else:
+        last = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
+    offset = (last.weekday() - weekday) % 7
+    return last - datetime.timedelta(days=offset)
+
+
+def us_market_holidays(year):
+    """{date: name} of full NYSE/Nasdaq closures for `year`.
+
+    Covers fixed-date holidays (with Sat->Fri / Sun->Mon observance), the
+    Monday/Thursday floating holidays, and Good Friday (Easter-derived).
+    Does NOT include half-days (e.g. day after Thanksgiving) — those still trade.
+    """
+    h = {}
+    nyd = datetime.date(year, 1, 1)
+    if nyd.weekday() != 5:                       # NYSE: no Fri obs. when Jan 1 is Sat
+        h[_observed(nyd)] = "New Year's Day"
+    h[_nth_weekday(year, 1, 0, 3)] = "Martin Luther King Jr. Day"
+    h[_nth_weekday(year, 2, 0, 3)] = "Presidents' Day"
+    h[_easter(year) - datetime.timedelta(days=2)] = "Good Friday"
+    h[_last_weekday(year, 5, 0)] = "Memorial Day"
+    if year >= 2022:                             # Juneteenth became a market holiday in 2022
+        h[_observed(datetime.date(year, 6, 19))] = "Juneteenth"
+    h[_observed(datetime.date(year, 7, 4))] = "Independence Day"
+    h[_nth_weekday(year, 9, 0, 1)] = "Labor Day"
+    h[_nth_weekday(year, 11, 3, 4)] = "Thanksgiving Day"
+    h[_observed(datetime.date(year, 12, 25))] = "Christmas Day"
+    return h
+
+
+def _et_today():
+    import pytz
+    return datetime.datetime.now(pytz.timezone("US/Eastern")).date()
+
+
+def is_market_holiday(d=None):
+    """Holiday name if `d` (default: today ET) is a US market holiday, else None."""
+    if d is None:
+        d = _et_today()
+    return us_market_holidays(d.year).get(d)
+
+
+def next_trading_day(d=None):
+    """Next date after `d` (default today ET) that is a weekday and not a holiday."""
+    if d is None:
+        d = _et_today()
+    nd = d + datetime.timedelta(days=1)
+    while nd.weekday() >= 5 or is_market_holiday(nd):
+        nd += datetime.timedelta(days=1)
+    return nd
+
+
+# ---------------------------------------------------------------------------
 # Market session
 # ---------------------------------------------------------------------------
 
 def market_session():
-    """Return 'pre', 'open', 'post', or 'closed' based on US/Eastern time."""
-    import datetime
+    """Return 'holiday', 'pre', 'open', 'post', or 'closed' (US/Eastern).
+
+    'holiday' takes precedence (full-closure days); weekends return 'closed'.
+    """
     import pytz
 
-    et = pytz.timezone("US/Eastern")
-    now = datetime.datetime.now(et).time()
+    now_dt = datetime.datetime.now(pytz.timezone("US/Eastern"))
+    if is_market_holiday(now_dt.date()):
+        return "holiday"
+    if now_dt.weekday() >= 5:                     # Sat/Sun
+        return "closed"
+    now = now_dt.time()
     if datetime.time(4, 0) <= now < datetime.time(9, 30):
         return "pre"
     if datetime.time(9, 30) <= now < datetime.time(16, 0):
@@ -115,6 +214,21 @@ def day_trade_conditions():
       3-4   Poor      — choppy or high VIX, consider skipping
       0-2   Avoid     — high VIX + downtrend, sit out
     """
+    # --- Market-holiday short-circuit (no live session today) ---
+    hol = is_market_holiday()
+    if hol:
+        nxt = next_trading_day()
+        return {
+            "vix": None, "spy_trend": "n/a", "qqq_trend": "n/a",
+            "score": 0,
+            "verdict": f"MARKET CLOSED — {hol} (US holiday)",
+            "notes": [
+                f"US equity markets are closed today ({hol}).",
+                f"Any tape/scan data is stale — do NOT trade. Next session: {nxt:%a %b %d}.",
+            ],
+            "session": "holiday",
+        }
+
     notes = []
     score = 5  # neutral start
 
