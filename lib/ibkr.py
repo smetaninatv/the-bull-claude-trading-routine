@@ -3,6 +3,8 @@
 HUMAN-IN-THE-LOOP: orders are built with transmit=False. Nothing is sent to
 IBKR until `transmit()` is called after the user approves.
 """
+import math
+
 from ib_async import IB, LimitOrder, Stock, StopOrder
 
 HOST = "127.0.0.1"
@@ -140,10 +142,94 @@ def prepare_bracket(ib, symbol, action, quantity, entry, stop, target):
     return contract, list(bracket)
 
 
+def scaled_split(quantity, partial_frac=0.5):
+    """Split `quantity` into (partial, runner) shares for a scale-out.
+
+    Both halves are >= 1 (a scale-out needs at least 2 shares). The partial is
+    `floor(quantity * partial_frac)`, the runner gets the remainder.
+    """
+    if quantity < 2:
+        raise ValueError(
+            "scale-out needs quantity >= 2 (can't split 1 share); "
+            "use prepare_entry / prepare_bracket instead"
+        )
+    q1 = max(1, math.floor(quantity * partial_frac))
+    q2 = quantity - q1
+    if q2 < 1:                       # partial_frac rounded up to the whole size
+        q1, q2 = quantity - 1, 1
+    return q1, q2
+
+
+def prepare_scaled_bracket(ib, symbol, action, quantity, entry, stop,
+                           target1=None, target2=None, partial_frac=0.5):
+    """Scale-out entry: take a partial at target1 (default 1:1 R), run the rest.
+
+    The professional exit: bank ~half at the first target, move risk off, and let
+    the remainder run on the trailing stop (the exit scan's 2-bar ratchet). Built
+    as TWO independent OCA sub-brackets so a partial fill does NOT strand the runner:
+
+        parent  : <action> quantity @ entry            (limit, transmit=False)
+        partial : <exit> q1 @ target1  +  <exit> q1 STP stop   (OCA group ...-P)
+        runner  : [<exit> q2 @ target2]  +  <exit> q2 STP stop (OCA group ...-R)
+
+    - When target1 fills, only the PARTIAL's stop cancels (its own OCA); the runner
+      keeps its own stop, which the exit scan then ratchets up. The two halves never
+      interfere.
+    - `target1=None` defaults to **1:1 reward:risk** (`entry +/- |entry-stop|`) — the
+      standard "first scale at 1R".
+    - `target2=None` (default) gives the runner **no fixed target** — the trailing
+      2-bar stop runs it (house style). Pass a price to cap the runner instead.
+    - Sizing: pass the full `quantity` from `config.position_size`; it's split here.
+      Needs quantity >= 2.
+
+    All legs are transmit=False. Returns (contract, [parent, ...legs]); release with
+    `transmit()` (sets the last leg transmit=True) after the user approves.
+    """
+    action = action.upper()
+    exit_action = "SELL" if action == "BUY" else "BUY"
+    sign = 1 if action == "BUY" else -1
+    risk = abs(entry - stop)
+    if target1 is None:
+        target1 = round(entry + sign * risk, 2)          # 1:1 R
+
+    q1, q2 = scaled_split(quantity, partial_frac)
+    contract = qualify(ib, symbol)
+    rid = ib.client.getReqId
+    parent = LimitOrder(action, quantity, entry, orderId=rid(), transmit=False)
+    base = f"{symbol}_SCALE_{parent.orderId}"
+    legs = [parent]
+
+    # Partial sub-bracket (OCO: target1 vs stop), size q1
+    ocp = f"{base}_P"
+    legs.append(LimitOrder(exit_action, q1, target1, orderId=rid(),
+                           parentId=parent.orderId, ocaGroup=ocp, ocaType=1,
+                           transmit=False))
+    legs.append(StopOrder(exit_action, q1, stop, orderId=rid(),
+                          parentId=parent.orderId, ocaGroup=ocp, ocaType=1,
+                          transmit=False))
+
+    # Runner sub-bracket, size q2. With a fixed target -> its own OCO; without ->
+    # a lone protective stop (the exit scan trails it). Only OCA-link when paired.
+    if target2 is not None:
+        ocr = f"{base}_R"
+        legs.append(LimitOrder(exit_action, q2, target2, orderId=rid(),
+                               parentId=parent.orderId, ocaGroup=ocr, ocaType=1,
+                               transmit=False))
+        legs.append(StopOrder(exit_action, q2, stop, orderId=rid(),
+                              parentId=parent.orderId, ocaGroup=ocr, ocaType=1,
+                              transmit=False))
+    else:
+        legs.append(StopOrder(exit_action, q2, stop, orderId=rid(),
+                              parentId=parent.orderId, transmit=False))
+    return contract, legs
+
+
 def transmit(ib, contract, bracket):
     """Send a previously-prepared bracket AFTER the user approves it.
 
-    Placing the last child with transmit=True releases the whole group.
+    Placing the last child with transmit=True releases the whole group. Works for
+    prepare_entry / prepare_bracket / prepare_scaled_bracket (the parent is first
+    and the final leg's transmit=True releases every order in the group).
     """
     bracket[-1].transmit = True
     return [ib.placeOrder(contract, o) for o in bracket]

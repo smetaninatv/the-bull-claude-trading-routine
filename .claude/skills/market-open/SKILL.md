@@ -57,6 +57,13 @@ Goal: turn approved candidates into live orders — human-in-the-loop. **Never t
      contract, orders = lib.ibkr.prepare_entry(ib, sym, "BUY", qty, entry, stop)
      ```
      `orders` = [entry limit, protective stop], both `transmit=False`.
+   - **Scale-out option (lock partial profit + run the rest) — `lib.ibkr.prepare_scaled_bracket`.** The professional exit: bank ~half at the first target and trail the remainder. Use it (instead of `prepare_entry`) when the user wants to *de-risk early without an all-or-nothing target* — e.g. for a higher-conviction entry, or whenever they ask "how do I lock profit?" (a scale-out is the answer, not a tight stop). Needs `qty >= 2`.
+     ```python
+     # take 50% at 1:1 R (target1=auto), run the other 50% on the trailing stop:
+     contract, orders = lib.ibkr.prepare_scaled_bracket(ib, sym, "BUY", qty, entry, stop)
+     # or cap the runner with a fixed target2=<price> instead of trailing it
+     ```
+     Builds two independent OCA sub-brackets (partial+stop, runner+stop) so a partial fill never strands the runner; the exit-scan then ratchets the runner's stop. Present the split (e.g. "5 @ $105 = +1R locked, 5 trailing") in the approval ask.
    - **Pre-stage to cut latency:** build the order object **at the moment the candidate is validated**, before asking for approval — so approval → instant `transmit(...)`, with no second round of data-pull and order construction in between. CRWV 2026-06-12 was a valid $101.87 entry that bounced to $104 in the gap between validating it and being ready to place — the setup was lost to latency, not to a bad read.
 6. **Present for approval.** Show each proposed order: symbol, qty, entry, **catastrophic stop** (price + the % / $ it risks), % of account, and the chart. Note the exit is trailing (no fixed target). Ask which to send.
 7. **Transmit only approved orders:** `lib.ibkr.transmit(ib, contract, orders)`. Log each `status="approved"` (→ `filled` when confirmed) via `lib.journal.log_trade(ts, ...)` with an ISO timestamp.
