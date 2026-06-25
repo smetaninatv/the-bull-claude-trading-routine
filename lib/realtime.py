@@ -141,6 +141,29 @@ def market_session():
     return "closed"
 
 
+def market_closed_reason(d=None):
+    """Human reason the market is closed right now, or None if a session is live.
+
+    One guard for the routines: covers **holidays AND weekends** (and weekday
+    off-hours) with a single clear message. Returns None when `market_session()`
+    is a tradeable/extended session ('pre'/'open'/'post') so the routine proceeds.
+    Examples: "Juneteenth (US holiday)", "the weekend (Saturday)",
+    "outside trading hours (US/Eastern)".
+    """
+    import pytz
+
+    sess = market_session()
+    if sess in ("pre", "open", "post"):
+        return None
+    hol = is_market_holiday()
+    if hol:
+        return f"{hol} (US holiday)"
+    now = datetime.datetime.now(pytz.timezone("US/Eastern"))
+    if now.weekday() >= 5:
+        return f"the weekend ({now:%A})"
+    return "outside trading hours (US/Eastern)"
+
+
 def minutes_to_close():
     """Minutes remaining until 4 PM ET. Negative if after close."""
     import datetime

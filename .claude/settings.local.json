@@ -7,7 +7,11 @@
       "Bash(python -c \"import json; d=json.load\\(open\\('.claude/settings.json'\\)\\); print\\('VALID, Bash allowed:', 'Bash' in d['permissions']['allow']\\)\")",
       "WebSearch",
       "Skill(schedule)",
-      "Skill(schedule:*)"
+      "Skill(schedule:*)",
+      "mcp__visualize__read_me",
+      "mcp__visualize__show_widget",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
     ]
   }
 }

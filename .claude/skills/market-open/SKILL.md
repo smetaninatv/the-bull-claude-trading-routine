@@ -7,9 +7,16 @@ description: Market-open execution (~15:30 CET / 9:30 ET + first 30 min, Mon-Fri
 
 Goal: turn approved candidates into live orders — human-in-the-loop. **Never transmit without the user's explicit OK.**
 
+> **MANDATORY for every stock you name (user rule, 2026-06-22):** any ticker you *suggest, validate, or present* — day OR swing — MUST come with **(1) ENTRY price, (2) EXIT pair = STOP + TARGET, (3) R:R, and (4) a saved annotated CHART** (`lib.charts.save_chart`). This holds whether or not you build an order for it. If a name is extended / R:R is poor, still show the levels and label it ("don't chase / watch / day-trade only") — never name a ticker without its entry, exits, and chart.
+
 ## Steps
 
-0. **Market-holiday / weekend guard — check FIRST.** Call `lib.realtime.market_session()`. If it returns `"holiday"`, the US market is **closed today** — **STOP**: tell the user "🛑 Market closed today — *<lib.realtime.is_market_holiday()>*; next session *<lib.realtime.next_trading_day()>*" and do **not** run any holdings review, validation, or order building (there is no live session; prices/VWAP are stale). For scheduled auto-runs, also skip on a `"closed"` weekend. Only proceed when `session` is `"open"` (or `"pre"` right at the open).
+0. **Market-closed guard — check FIRST.** Covers **weekends AND holidays** identically. Call `lib.realtime.market_closed_reason()` — it returns a human reason (a holiday name, or "the weekend (Saturday)", or weekday off-hours) or `None` when a real session is live.
+   ```python
+   from lib.realtime import market_closed_reason, next_trading_day
+   reason = market_closed_reason()
+   ```
+   If `reason` is truthy, the US market is **closed** — **STOP**: tell the user "🛑 **Market closed — *<reason>*; next session *<next_trading_day()>*.**" and do **not** run any holdings review, validation, or order building (there is no live session; prices/VWAP are stale). Applies to manual and scheduled auto-runs alike — say it's closed, don't skip silently. Only proceed when `market_closed_reason()` is `None`.
 
 1. **Connect + data setup.**
    - Swing positions: `lib.ibkr.connect()`, `lib.data.set_delayed()` as usual — delayed data is fine for daily-bar swing entries.
@@ -44,7 +51,7 @@ Goal: turn approved candidates into live orders — human-in-the-loop. **Never t
    - **Re-run the live relative-volume board** to catch fresh movers the premarket scan couldn't rank yet: `lib.screener.market_scan(min_relvol=2.0, size=40)` — now that the session is open, relvol is meaningful, so the TradingView `Rel vol > 2` cut applies for real (pre-market it was relaxed to `min_relvol=0`). Fold any new high-relvol names into the candidate set before ranking, then validate them through the same five gates.
    - **Rank the day candidates with `lib.daytrade.scan([...])`** (added 2026-06-15) before picking. It scores each name 0-10 on the metrics that actually pick day-trade winners: **RVOL** (relative volume — today's pace vs the stock's own normal; >2-3 = something's happening), **daily ATR%** (juice — ~2-8% sweet spot), **above-VWAP**, **Opening-Range-Breakout**, **relative strength vs SPY**, and **gap%**. Prefer the high-score names that ALSO pass the five gates above. RVOL is the single best "is this the right stock today" signal — a clean setup on a high-RVOL leader beats the same chart on a quiet name. (RSI/MACD are deliberately not used — they lag intraday.)
    - *Mid-day mode* (> 60 min after open): additionally require 3-bar avg dollar volume ≥ $8M (tighter than the base $5M — mid-day volume dries up and thin setups fail more often).
-   - *Swing:* still **above 200 SMA**, 8 EMA momentum intact, and (for breakout entries) price holding above the broken resistance level rather than failing back under it **on expanding volume** (skip low-volume breakouts — they fail often).
+   - *Swing:* run **`lib.indicators.entry_quality(df)` FIRST** (the entry-timing gate — Weinstein/Minervini/O'Neil). Only build an order if it returns **`buyable=True`** (`BUYABLE_PULLBACK`/`BUYABLE_BASE`) — a Stage 2 trend at a low-risk, non-extended moment — and **use its `ideal_entry`** (just above the rising 20 SMA / pivot) as the entry, NOT the current price. If it returns `EXTENDED` / `MID_TREND` → **do not buy, it's a chase** (carry it as watch-only with the pullback level); if `NOT_STAGE2` → drop it. This is the guardrail against the week-of-2026-06-22 mistake of buying extended names (COIN/SMCI/PTCT) at bad prices. Also confirm: above 200 SMA, 8 EMA momentum intact, and (for breakouts) holding the level **on expanding volume** (skip low-volume breakouts).
    Drop invalidated names and say why.
 4. **Check account state & limits.** `lib.ibkr.equity(ib)`, current `positions(ib)`. Enforce `risk.yaml` limits: max concurrent positions, daily loss limit (if breached, propose no new entries).
    - **PDT guard (day trades):** if `equity < limits.pdt_min_equity_usd` ($25k) AND `lib.ibkr.day_trades_remaining(ib)` is 0, **do not propose new day trades** — opening one risks a PDT flag/restriction. Warn and offer to hold as swing instead. (A negative/large value = unlimited; fine.)

@@ -57,6 +57,61 @@ def add_indicators(df):
     return df
 
 
+def entry_quality(df, extended_atr=4.0, pullback_atr=2.0):
+    """WHEN to buy — separate a low-risk entry from an extended chase.
+
+    Synthesizes how the consistent winners actually buy — Weinstein (Stage 2),
+    Minervini (volatility contraction / VCP), O'Neil (buy at the pivot, NEVER
+    extended). Our old screen rewarded "trending + breakout + momentum", which
+    surfaces names that have ALREADY RUN (52-wk highs); this adds the missing
+    question: *is now a good moment, or is it extended?*
+
+      stage2      : close > a RISING 50 SMA and > 200 SMA (an uptrend that's advancing)
+      ext_atr     : ATRs the price sits ABOVE the 20 SMA — the 'chase' gauge.
+                    O'Neil's rule: far above the MA = extended = wait for a pullback.
+      contraction : avg range of the last 5 bars / the prior 15 (<1 = coiling, VCP-like)
+      buyable     : True only at a low-risk moment (pullback to the rising MA, or a
+                    tight base near the pivot) WITHIN a Stage 2 trend.
+      ideal_entry : the level to actually buy AT (just above the 20 SMA) — not the
+                    current extended price.
+      label       : BUYABLE_PULLBACK | BUYABLE_BASE | EXTENDED | NOT_STAGE2 | MID_TREND
+
+    Expects add_indicators() columns (sma20/sma50/sma200/atr). Returns a dict.
+    """
+    last = df.iloc[-1]
+    c = float(last["close"]); a = float(last["atr"]) or 1e-9
+    ma20 = float(last["sma20"]); s50 = float(last["sma50"]); s200 = float(last["sma200"])
+    s50_prev = float(df["sma50"].iloc[-11]) if len(df) > 11 else s50
+    s200_prev = float(df["sma200"].iloc[-21]) if len(df) > 21 else s200
+    stage2 = (c > s50) and (c > s200) and (s50 >= s50_prev) and (s200 >= s200_prev)
+
+    ext_atr = (c - ma20) / a
+    tr = (df["high"] - df["low"]).abs()
+    recent = float(tr.tail(5).mean())
+    prior = float(tr.iloc[-20:-5].mean()) if len(df) >= 20 else recent
+    contraction = (recent / prior) if prior else 1.0
+    ideal_entry = round(ma20 + 0.3 * a, 2)        # just above the rising MA = the low-risk buy
+
+    if not stage2:
+        label, buyable, reason = "NOT_STAGE2", False, \
+            "not a Stage 2 uptrend (not above a rising 50/200 SMA) — skip, no trend behind it"
+    elif ext_atr > extended_atr:
+        label, buyable, reason = "EXTENDED", False, \
+            f"{ext_atr:.1f} ATR above the 20 SMA — EXTENDED, do NOT chase; wait for a pullback to ~{ideal_entry}"
+    elif ext_atr <= pullback_atr:
+        label, buyable, reason = "BUYABLE_PULLBACK", True, \
+            f"near the rising 20 SMA ({ext_atr:.1f} ATR above) — low-risk pullback entry, tight stop"
+    elif contraction < 0.8:
+        label, buyable, reason = "BUYABLE_BASE", True, \
+            f"tight base (range contracting to {contraction:.2f}×) near the pivot — buyable on the breakout"
+    else:
+        label, buyable, reason = "MID_TREND", False, \
+            f"in trend but mid-range ({ext_atr:.1f} ATR above MA, no contraction) — wait for a pullback or a tight pivot"
+
+    return {"stage2": stage2, "ext_atr": round(ext_atr, 2), "contraction": round(contraction, 2),
+            "buyable": buyable, "ideal_entry": ideal_entry, "label": label, "reason": reason}
+
+
 def add_vwap(df):
     """Add session VWAP to an INTRADAY DataFrame (e.g. 5-min bars).
 

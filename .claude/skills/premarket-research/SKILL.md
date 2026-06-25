@@ -7,17 +7,18 @@ description: Pre-market research (~13:30 CET / 7:30 ET, Mon-Fri). Screens the wa
 
 Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade candidates with charts and reasoning, before the US open.
 
+> **MANDATORY for every stock you name (user rule, 2026-06-22):** any ticker you *suggest, surface, or mention as a candidate* — day OR swing — MUST be presented with **(1) a potential ENTRY price, (2) an EXIT pair = STOP + TARGET, (3) the R:R, and (4) a saved annotated CHART** (`lib.charts.save_chart` with entry/stop/target). Never list a ticker as a candidate without these four. If a name is too extended for a clean entry (R:R poor / at highs), still show the levels but say so plainly and label it "day-trade only / watch" — don't drop the prices. A bare ticker is not an acceptable suggestion.
+
 ## Steps
 
-0. **Market-holiday / weekend guard — check FIRST, before anything else.**
+0. **Market-closed guard — check FIRST, before anything else.** Covers **weekends AND holidays** with the same explicit notice (never run silently / never present stale data as live).
    ```python
-   from lib.realtime import market_session, is_market_holiday, next_trading_day
-   sess = market_session()
-   if sess == "holiday":
-       hol = is_market_holiday()
-       print(f"MARKET CLOSED today — {hol}. Next session: {next_trading_day():%a %b %d}.")
+   from lib.realtime import market_closed_reason, next_trading_day
+   reason = market_closed_reason()      # None when a real session is live
+   if reason:
+       print(f"MARKET CLOSED — {reason}. Next session: {next_trading_day():%a %b %d}.")
    ```
-   If `market_session()` is `"holiday"`, the US market is **closed today** — **STOP the routine**. Tell the user plainly: "🛑 Market closed today — *<holiday>*; next session *<date>*." Do **NOT** run the scan, tape read, or candidate analysis: `day_trade_conditions()` returns score 0 on a holiday, and any yfinance "movers"/prices are **stale carry-over** that will mislead. (For scheduled auto-runs, also skip silently on a `"closed"` weekend.) Only continue when a real pre/open session is pending.
+   If `market_closed_reason()` returns a reason (a holiday like *Juneteenth*, or a weekend like *Saturday*, or weekday off-hours), the US market is **closed** — **STOP the routine** and tell the user plainly: "🛑 **Market closed — *<reason>*; next session *<date>*.**" Do **NOT** run the scan, tape read, or candidate analysis: `day_trade_conditions()` returns score 0, and any yfinance "movers"/prices are **stale carry-over** that will mislead. Only continue when `market_closed_reason()` is `None` (a real pre/open session). This applies to manual runs and scheduled auto-runs alike — say it's closed, don't skip silently.
 
 1. **Connect & set delayed data.**
    ```python
@@ -65,7 +66,13 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
 4. **Apply the user's rule shortlist (hybrid).** These are the user's rules — apply them, don't substitute generic ones. Tag each candidate `day` or `swing`.
 
    **Swing (daily chart):**
-   - **Macro trend filter — 200 SMA:** only go long when price is above `sma200` (uptrend). Skip / treat as short-bias if below.
+   - **⭐ ENTRY-TIMING GATE — `lib.indicators.entry_quality(df)` (the "good moment to buy" check, added 2026-06-25).** This is how the consistent winners (Weinstein/Minervini/O'Neil) actually buy: a Stage 2 uptrend bought at a *low-risk* moment, **never extended.** Run it on every swing candidate and let it drive the recommendation:
+     - **`BUYABLE_PULLBACK` / `BUYABLE_BASE`** → this is an actionable buy NOW. Use `ideal_entry` (just above the rising 20 SMA / the pivot) as the entry — the stop sits right below it, so risk is tight and R:R is high.
+     - **`EXTENDED`** → the name has already run (the ALAB/COIN/SMCI-at-highs trap we kept falling into). **Do NOT suggest buying it.** Show it on a *watchlist* with "wait for a pullback to ~`ideal_entry`", not as a buy.
+     - **`MID_TREND`** → in an uptrend but mid-range (no pullback, no tight base) → also "wait for the pullback to `ideal_entry` or a tight pivot." (PTCT on 2026-06-24 was MID_TREND with ideal_entry $75.50 — we chased it at $84.43; this gate would have said wait.)
+     - **`NOT_STAGE2`** → below a rising 50/200 SMA → **skip entirely**, no trend behind it (COIN/SMCI were NOT_STAGE2 — buys we should never have made).
+     **Rule: only names that come back `buyable=True` go on the actionable swing shortlist; everything else is watch-only with its pullback level.** This replaces "it's trending + broke out → buy" (which surfaced extended chases) with "it's Stage 2 AND it's a low-risk moment → buy."
+   - **Macro trend filter — 200 SMA:** only go long when price is above `sma200` (uptrend). Skip / treat as short-bias if below. (Subsumed by `entry_quality`'s Stage 2 check, which is stricter — it also requires a *rising* 50 SMA.)
    - **Momentum/entry — 8 EMA:** favour names where price is holding above a rising `ema8`, or pulling back to the `ema8` and resuming — that's the entry trigger inside the larger 200 SMA trend.
    - **Resistance breakout:** use `lib.indicators.find_resistance(df, lookback, tolerance_pct, min_touches)` then `lib.indicators.is_breakout(df, level, confirm_pct)`. `find_resistance` now returns the **nearest relevant** tested level (within `max_dist_pct` of price), not the globally most-touched one — so it no longer hands back a stale level far below price (the old failure mode that made breakout flags useless). A `None` result is legitimate: a name in price discovery / clean uptrend has **no horizontal 2-touch ceiling** — don't force a breakout read, fall back to the 200 SMA + 8 EMA momentum rule. A fresh breakout (`is_breakout` True) of a real nearby level, while above the 200 SMA with 8 EMA momentum, is the strongest swing setup. Note the level and touch count in the rationale.
 
