@@ -175,6 +175,39 @@ def minutes_to_close():
     return int((close - now).total_seconds() / 60)
 
 
+def minutes_since_open():
+    """Minutes since the 9:30 AM ET open (negative before the open).
+
+    ET-anchored (DST-safe via pytz), so it stays correct year-round even though
+    a CET wall-clock schedule drifts vs the US open when US/EU DST shift on
+    different dates. Use to gate the market-open routine to a real post-open time.
+    """
+    import pytz
+
+    et = pytz.timezone("US/Eastern")
+    now = datetime.datetime.now(et)
+    open_dt = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    return int((now - open_dt).total_seconds() / 60)
+
+
+# Market-open routine runs this many minutes after the 9:30 ET open, so live
+# VWAP / opening-range / RVOL are formed before it validates anything.
+MARKET_OPEN_DELAY_MIN = 5
+
+
+def market_open_ready():
+    """True once it's a live regular session AND >= MARKET_OPEN_DELAY_MIN past the open.
+
+    The market-open routine should gate on this: if False, it's too early (or not
+    a trading session) — don't run the open review yet. Returns False on
+    holidays/weekends/pre-market and in the first MARKET_OPEN_DELAY_MIN minutes.
+    """
+    if market_closed_reason() is not None:
+        return False
+    m = minutes_since_open()
+    return 0 <= m - MARKET_OPEN_DELAY_MIN < 360        # within the trading session, past the delay
+
+
 # ---------------------------------------------------------------------------
 # Intraday bars (yfinance — primary)
 # ---------------------------------------------------------------------------
