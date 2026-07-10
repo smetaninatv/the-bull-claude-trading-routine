@@ -154,10 +154,19 @@ def scan(symbols, spy_pct=None, rth_only_for_or=True):
     return out
 
 
-def _latest_headline(sym):
+def _latest_headline(sym, max_age_days=5):
     """Most recent news headline for `sym` (the likely driver) as
-    {title, date, provider}, or None. yfinance nests it under content.title."""
+    {title, date, provider}, or None if there is no headline within
+    `max_age_days`. yfinance nests it under content.title.
+
+    Picks the *newest* dated item within the window (not just the first in the
+    list) and drops anything older than the cutoff — so a stale article never
+    gets surfaced as today's "catalyst" (the CHRN-April-on-a-July-run bug).
+    Undated items are skipped (we can't vouch they're recent)."""
     import yfinance as yf
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    best = None
     try:
         news = yf.Ticker(sym).news or []
         for item in news:
@@ -167,15 +176,29 @@ def _latest_headline(sym):
             title = c.get("title")
             if not title:
                 continue
-            prov = c.get("provider")
-            return {
-                "title": title.strip(),
-                "date": (c.get("pubDate") or "")[:10],
-                "provider": prov.get("displayName") if isinstance(prov, dict) else None,
-            }
+            try:
+                dt = datetime.fromisoformat((c.get("pubDate") or "").replace("Z", "+00:00"))
+            except ValueError:
+                continue                       # undated -> can't confirm recency
+            if dt < cutoff:
+                continue
+            if best is None or dt > best[0]:
+                prov = c.get("provider")
+                best = (dt, {
+                    "title": title.strip(),
+                    "date": dt.date().isoformat(),
+                    "provider": prov.get("displayName") if isinstance(prov, dict) else None,
+                })
     except Exception:
         pass
-    return None
+    return best[1] if best else None
+
+
+def latest_headline(sym, max_age_days=5):
+    """Public accessor for the most recent driver headline of ANY symbol —
+    day OR swing name — so the report can show a catalyst per ticker, not just
+    for the day-trade board. Returns {title, date, provider} or None."""
+    return _latest_headline(sym, max_age_days=max_age_days)
 
 
 def _pros_cons(r):

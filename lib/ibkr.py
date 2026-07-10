@@ -13,6 +13,13 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 4001
 CLIENT_ID = 17
 
+# Fill in pre-/post-market (extended hours) by default. This Gateway's order
+# preset is RTH-only, which parks pre-market entries until 9:30 (the MU
+# 2026-07-09 case: a pre-market limit wouldn't fill until the flag was set).
+# Setting outsideRth at construction fills extended-hours. (User-mandated
+# 2026-07-10: "always use outsideRTH=True".)
+OUTSIDE_RTH = True
+
 
 def connect(host=HOST, port=DEFAULT_PORT, client_id=CLIENT_ID, readonly=False,
             require_paper=True):
@@ -122,6 +129,8 @@ def prepare_entry(ib, symbol, action, quantity, entry, stop):
     protective = StopOrder(exit_action, quantity, stop,
                            orderId=ib.client.getReqId(),
                            parentId=parent.orderId, transmit=False)
+    for o in (parent, protective):
+        o.outsideRth = OUTSIDE_RTH
     return contract, [parent, protective]
 
 
@@ -139,6 +148,7 @@ def prepare_bracket(ib, symbol, action, quantity, entry, stop, target):
     )
     for o in bracket:
         o.transmit = False
+        o.outsideRth = OUTSIDE_RTH
     return contract, list(bracket)
 
 
@@ -221,6 +231,8 @@ def prepare_scaled_bracket(ib, symbol, action, quantity, entry, stop,
     else:
         legs.append(StopOrder(exit_action, q2, stop, orderId=rid(),
                               parentId=parent.orderId, transmit=False))
+    for o in legs:
+        o.outsideRth = OUTSIDE_RTH
     return contract, legs
 
 
@@ -231,5 +243,7 @@ def transmit(ib, contract, bracket):
     prepare_entry / prepare_bracket / prepare_scaled_bracket (the parent is first
     and the final leg's transmit=True releases every order in the group).
     """
+    for o in bracket:
+        o.outsideRth = OUTSIDE_RTH
     bracket[-1].transmit = True
     return [ib.placeOrder(contract, o) for o in bracket]

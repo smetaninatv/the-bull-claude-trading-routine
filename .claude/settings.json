@@ -4,9 +4,11 @@
       "Bash",
       "Read",
       "PowerShell",
-      "Edit(/.claude/skills/market-open/**)",
-      "Edit(/.claude/skills/premarket-research/**)",
-      "Edit(/.claude/skills/exit-scan/**)"
+      "Edit",
+      "Write",
+      "Python",
+      "Bash(PYTHONPATH=/c/Projects/trading-routine python -c ' *)",
+      "Bash(PYTHONPATH=/c/Projects/trading-routine python -c \"import inspect; from lib import journal; print\\('append_note:', inspect.signature\\(journal.append_note\\)\\); print\\([f for f in dir\\(journal\\) if not f.startswith\\('_'\\)]\\)\")"
     ]
   }
 }
