@@ -1,11 +1,17 @@
 ---
 name: exit-scan
-description: Exit scan — hourly for swing positions, every 5–15 min for day trades (Mon-Fri). Maintains a strict-UP ratcheting 2-bar trailing stop on every open position, AUTO-RAISING the resting stop order at IBKR as new 2-bar highs print (no approval — it only de-risks), and exits when the stop is hit, plus secondary safety exits. Position-closing exits still require human approval before transmitting.
+description: Exit scan — hourly for swing positions, every 5–15 min for day trades (Mon-Fri). Maintains a strict-UP ratcheting 2-bar trailing stop on every open position, AUTO-RAISING the resting stop order at IBKR as new 2-bar highs print (no approval — it only de-risks), and exits when the stop is hit, plus secondary safety exits. Runs two ways: an unattended every-15-min job (scripts/auto_exit_scan.py) that auto-raises stops AND auto-closes at breakeven-or-better without approval (never at a loss, underwater names untouched), and this manual skill for the richer/discretionary work. Loss-making closes, target raises, and entry cancels are never automated — they stay human-in-the-loop.
 ---
 
 # Exit scan routine
 
-Goal: maintain a **ratcheting 2-bar trailing stop** on each position and exit when it's hit — human-in-the-loop.
+Goal: maintain a **ratcheting 2-bar trailing stop** on each position and exit when it's hit.
+
+> **Two ways this runs (user, 2026-07-11):**
+> 1. **Unattended (`scripts/auto_exit_scan.py --live`, Task Scheduler every 15 min in RTH).** The **de-risk-only slice**, authorized to act WITHOUT approval: it (a) raises/places each *profitable* position's protective stop to the 2-bar ratchet, and (b) auto-**closes** on a secondary trigger (daily close below the 200 SMA) — but **only at breakeven-or-better** (`price ≥ avg cost`), so it can never realize a loss and never touches an underwater name. Before any market close it cancels every resting SELL for the symbol and re-reads to confirm they're gone; if one can't be cancelled it does **not** sell (orphan-short risk) and notifies for manual action. The **primary** 2-bar-stop exit is executed by the resting STP at IBKR itself (exact price, between runs). Log: `output/auto_exit_scan.log`.
+> 2. **Manual (this skill).** The full, judgment-rich scan — day-trade 5-min management, VWAP-trail floor, re-entry scan, target-raise suggestions, entry-order re-validation, charts, and the loss-making / discretionary exits the unattended job deliberately won't take (closing below cost is never automated). Run it when present for anything beyond the mechanical de-risk.
+>
+> Both share the same rules below; the unattended job is just the subset that only ever de-risks. **Closing a position at a loss, raising a target, or cancelling an entry is NEVER automated — those stay human-in-the-loop.**
 
 > **Market-holiday guard — check FIRST.** Call `lib.realtime.market_session()`. If it returns `"holiday"`, the US market is **closed today** — there is no live tape and no bars print, so the ratchet/scan has nothing to do. Note "🛑 Market closed — *<holiday>*; resting stops stay in place, next session *<next_trading_day>*" and **skip the scan** (your protective stops still rest at IBKR and fire on the next session). Resume normal cadence on the next trading day.
 
