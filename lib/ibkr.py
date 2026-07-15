@@ -4,6 +4,7 @@ HUMAN-IN-THE-LOOP: orders are built with transmit=False. Nothing is sent to
 IBKR until `transmit()` is called after the user approves.
 """
 import math
+import time
 
 from ib_async import IB, LimitOrder, Stock, StopOrder
 
@@ -234,6 +235,57 @@ def prepare_scaled_bracket(ib, symbol, action, quantity, entry, stop,
     for o in legs:
         o.outsideRth = OUTSIDE_RTH
     return contract, legs
+
+
+def profit_lock_stop(avg_cost, last, ratchet, tick=0.01):
+    """Stop level for locking in a gain on an in-profit LONG (never below cost).
+
+    Given the position's average cost, current price, and the raw 2-bar ratchet
+    level, return a stop that is guaranteed to be a DE-RISKING profit/breakeven
+    lock: at least `avg_cost` (so a fill can't realize a loss), at most one tick
+    below `last` (so it doesn't fire instantly), and equal to the ratchet when
+    the ratchet sits inside that band (locking as much of the gain as structure
+    allows). Only meaningful when `last > avg_cost` (the caller's "in profit"
+    gate). Returns the rounded stop price.
+    """
+    upper = round(last - tick, 2)                 # just under market
+    lock = max(avg_cost, min(ratchet, upper))     # never below cost, never >= market
+    return round(lock, 2)
+
+
+def ratchet_lock_oca(ib, symbol, quantity, stop, target, replace_trades=(),
+                     exit_action="SELL", tag="ratchetlock"):
+    """De-risk a PROFITABLE open position: rest a ratchet-stop + chart-target OCA pair.
+
+    For a position now trading above its average cost, replace any loose
+    stop/target with a single OCA pair where a fill on either leg cancels the
+    other:
+        <exit> quantity STP  @ stop    (profit-lock / ratchet stop, >= avg cost)
+        <exit> quantity LMT  @ target  (chart-resistance target, from lib.indicators.chart_target)
+    Both GTC, same ocaGroup, ocaType=1. Because the stop sits at/above average
+    cost this only LOCKS IN A GAIN (de-risking), so — like a stop-raise — it is
+    transmitted immediately, no approval (user rule 2026-07-15).
+
+    `replace_trades` = existing open Trade objects for this symbol to cancel first
+    (the loose stop/target being superseded). Uses DIRECT GTC placement (not the
+    transmit() helper, which sets outsideRth and trips Error 10349 -> TIF DAY on
+    this Gateway). Returns [stop_trade, target_trade].
+    """
+    for t in replace_trades:
+        try:
+            ib.cancelOrder(t.order)
+        except Exception:
+            pass
+    if replace_trades:
+        ib.sleep(0.5)
+    contract = qualify(ib, symbol)
+    group = f"{symbol}_{tag}_{int(time.time())}"
+    rid = ib.client.getReqId
+    stop_o = StopOrder(exit_action, quantity, stop, orderId=rid(),
+                       tif="GTC", ocaGroup=group, ocaType=1, transmit=False)
+    tgt_o = LimitOrder(exit_action, quantity, target, orderId=rid(),
+                       tif="GTC", ocaGroup=group, ocaType=1, transmit=True)
+    return [ib.placeOrder(contract, stop_o), ib.placeOrder(contract, tgt_o)]
 
 
 def transmit(ib, contract, bracket):

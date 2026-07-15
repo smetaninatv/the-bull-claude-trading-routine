@@ -1,6 +1,6 @@
 ---
 name: exit-scan
-description: Exit scan — hourly for swing positions, every 5–15 min for day trades (Mon-Fri). Maintains a strict-UP ratcheting 2-bar trailing stop on every open position, AUTO-RAISING the resting stop order at IBKR as new 2-bar highs print (no approval — it only de-risks), and exits when the stop is hit, plus secondary safety exits. Position-closing exits still require human approval before transmitting.
+description: Exit scan — hourly for swing positions, every 5–15 min for day trades (Mon-Fri). Maintains a strict-UP ratcheting 2-bar trailing stop on every open position, AUTO-RAISING the resting stop order at IBKR as new 2-bar highs print (no approval — it only de-risks). Any position now IN PROFIT (price > avg cost) is auto-converted to a resting ratchet-stop + chart-resistance-target OCA pair with no approval (it only locks a gain). Exits when the stop is hit, plus secondary safety exits. Position-closing exits still require human approval before transmitting.
 ---
 
 # Exit scan routine
@@ -47,6 +47,26 @@ When `strategy.exits.no_exit_at_loss` is true (default), **never realize a loss*
 
 Because the laptop isn't always on, the protective stop must live as a **resting stop order at IBKR**, not just in this scan — so it protects the position between runs. Find the current resting stop via `lib.ibkr.open_orders(ib)`. The resting stop starts at the **catastrophic floor** (placed at entry) and never goes below it. Each scan: recompute the ratcheted 2-bar level; if it's **strictly higher** than the current resting stop **and >= average cost** (per the no-loss rule above), **AUTO-RAISE the stop order to the new level — no approval needed** (raising a protective stop only de-risks). **Never lower a stop.** If `price <= stop` and the exit would be at breakeven+, that's an exit: propose a close for approval (see below).
 
+## In-profit auto-lock: ratchet stop + chart target (user rule, 2026-07-15)
+
+When a position is **in profit** — current price **> average cost** ("a stock I've earned") — **automatically convert it to a resting ratchet-stop + chart-target OCA pair, no approval.** Setting/raising the stop at or above cost only locks in a gain (de-risking), so — like a stop-raise — it is transmitted immediately. This supersedes the "loose target-only" state such a winner is often left in (a resting limit-sell with no protective stop).
+
+Do this for every held long where `last > avg_cost`:
+
+1. **Ratchet stop, never below cost.** Compute `ratchet = lib.indicators.ratchet_2bar_stop(df)` on the style timeframe, then `stop = lib.ibkr.profit_lock_stop(avg_cost, last, ratchet)` — this guarantees `avg_cost <= stop < last` (locks the ratchet level when it's inside the band; otherwise breakeven at cost, or one tick under market). The stop can only ever move **up** on later scans — never re-place it lower.
+2. **Target from the CHART, not the internet.** `target, src = lib.indicators.chart_target(df, ref_price=last)` — the nearest tested resistance above price, else the recent swing high, else an ATR measured-move. **Do not** use an analyst/price-target figure here; the target must come off the chart.
+3. **Place as one OCA pair, replacing the loose orders.** Find the position's existing resting stop/target in `lib.ibkr.open_orders(ib)` and pass them as `replace_trades` so they're cancelled first:
+   ```python
+   from lib.ibkr import ratchet_lock_oca, profit_lock_stop
+   from lib.indicators import ratchet_2bar_stop, chart_target
+   stop = profit_lock_stop(avg_cost, last, ratchet_2bar_stop(df))
+   target, src = chart_target(df, ref_price=last)
+   ratchet_lock_oca(ib, sym, qty, stop, target, replace_trades=existing_stop_and_target_trades)
+   ```
+   A fill on either leg cancels the other (OCA), so the winner can't be both stopped and sold. Log it to the journal and report it as **LOCKED (ratchet+target)** with the stop, target, and target source.
+
+On a **subsequent** scan the position is already locked: only **raise** the stop if a new `profit_lock_stop(...)` is strictly higher (auto, de-risking); leave the target unless a `RAISE TARGET` proximity flag fires (step 4b — still a suggestion). If price falls back **below avg cost**, do not lower the stop below cost — the no-loss rule takes over (hold, catastrophic floor only).
+
 ## Day trade exits
 
 Day trades require intraday exit management — they use **5-min bars and a real-time price feed**, not daily bars. Two extra rules apply to day trades only:
@@ -83,6 +103,7 @@ Day trades require intraday exit management — they use **5-min bars and a real
      - **Day:** `get_intraday_bars(sym, "5m")` — near-real-time via Webull/yfinance. Do NOT use `lib.data.intraday_bars()` for day trade exits.
    - Compute `stop = ratchet_2bar_stop(df, lookback, include_current)`; get current price; note `avg_cost` and unrealized P&L from the portfolio item.
    - **Underwater check (no_exit_at_loss):** if `price < avg_cost`, **HOLD** — no exit, no resting stop below cost. Report "underwater, holding."
+   - **In profit (`price > avg_cost`) → AUTO-LOCK:** convert the position to a resting **ratchet-stop + chart-target OCA pair** per *In-profit auto-lock* above (no approval — the stop sits at/above cost, so it only locks a gain). Replace any loose stop/target with the OCA pair; report it as **LOCKED (ratchet+target)**.
    - Otherwise (breakeven+): **exit if `price <= stop`** (needs approval); else if the new stop is strictly above the resting stop **and >= avg_cost**, **auto-raise it now** (no approval). Report the stop level, the bars it came from, and the room above it.
 4. **Secondary safety exits** — flag these too, but they are **also suppressed when underwater** if `no_exit_at_loss` is on (they'd realize a loss):
    - *Swing:* close **below the 200 SMA** = hard trend-break exit.
@@ -99,6 +120,7 @@ Day trades require intraday exit management — they use **5-min bars and a real
    Never auto-cancel or auto-move an entry — present and act on approval. Cancel a prior-session order with the master client (`connect(client_id=0)`); the default client gets Error 10147 on another session's orders.
 
 5. **Apply the action types:**
+   - **LOCK (in-profit auto-lock)** (price > avg cost): **place the ratchet-stop + chart-target OCA pair immediately via `lib.ibkr.ratchet_lock_oca`, no approval** — the stop is at/above cost so it only locks a gain. Cancels/replaces the loose stop/target. Log it.
    - **RAISE STOP** (new ratcheted level above the resting stop): **modify the stop order immediately, no approval** — it only de-risks. Log it to the journal.
    - **RAISE TARGET** (price within ~1×ATR of a resting limit-sell and higher levels justify it): **suggest a higher target and ask** — do **not** move the order without approval (selling higher is not de-risking). On approval, cancel/replace the limit at the new level and log it.
    - **EXIT** (stop hit / safety exit): prepare a closing order with `transmit=False` and present it with P&L, the trigger, reasoning, and an updated chart (the chart's `stop=` line = the ratcheted level). **Requires approval.**

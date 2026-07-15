@@ -357,3 +357,40 @@ def is_breakout(df, level, confirm_pct=0.0):
     if level is None:
         return False
     return float(df["close"].iloc[-1]) > level * (1 + confirm_pct / 100.0)
+
+
+def chart_target(df, ref_price=None, lookback=60, min_gap_pct=0.5,
+                 tolerance_pct=1.0, min_touches=2):
+    """A profit target read off the CHART (never an external/analyst number).
+
+    For a position now in profit, pick the next credible ceiling ABOVE the
+    reference price, in priority order:
+      1. the nearest tested horizontal resistance above price
+         (`find_resistance`, >= min_touches pivots) — a level price actually
+         reacts to;
+      2. the highest swing high in the lookback window (the recent peak), if it
+         sits above price;
+      3. a measured extension `ref + 2*ATR` — the last-resort chart-derived level
+         when price is already at/near its highs (in clean discovery, no ceiling).
+
+    Returns (level, source_str). `level` is always strictly above `ref_price` by
+    at least `min_gap_pct` so it is a usable resting limit-sell.
+    """
+    sub = df.tail(lookback)
+    ref = float(ref_price) if ref_price is not None else float(sub["close"].iloc[-1])
+    floor = ref * (1 + min_gap_pct / 100.0)
+
+    # 1) nearest tested resistance above price (look further up than the default)
+    lvl, touches = find_resistance(sub, lookback=lookback, tolerance_pct=tolerance_pct,
+                                   min_touches=min_touches, max_dist_pct=25.0,
+                                   ref_price=ref)
+    if lvl is not None and lvl >= floor:
+        return round(float(lvl), 2), f"resistance x{touches}"
+
+    # 2) recent swing high (the peak we last printed)
+    swing_high = float(sub["high"].max())
+    if swing_high >= floor:
+        return round(swing_high, 2), "swing high"
+
+    # 3) measured extension off ATR (price is at/near highs, no ceiling overhead)
+    return round(ref + 2.0 * atr(sub["high"], sub["low"], sub["close"]).iloc[-1], 2), "ATR extension"
