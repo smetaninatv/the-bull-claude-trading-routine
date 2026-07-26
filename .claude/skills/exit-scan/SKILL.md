@@ -51,7 +51,9 @@ Because the laptop isn't always on, the protective stop must live as a **resting
 
 When a position is **in profit** — current price **> average cost** ("a stock I've earned") — **automatically convert it to a resting ratchet-stop + chart-target OCA pair, no approval.** Setting/raising the stop at or above cost only locks in a gain (de-risking), so — like a stop-raise — it is transmitted immediately. This supersedes the "loose target-only" state such a winner is often left in (a resting limit-sell with no protective stop).
 
-Do this for every held long where `last > avg_cost`:
+**Gain-size guard — check BEFORE locking.** Only lock when the open gain is at least **0.5×ATR**: `lib.ibkr.should_profit_lock(avg_cost, last, atr)`. A position only *marginally* above cost produces a lock stop pinned within a tick of market (`profit_lock_stop` clamps to `last − tick`), which fires on **any** downtick — turning a live swing into an instant breakeven exit and destroying the thesis. (BABA 2026-07-20: a +$3.35 open gain would have set the stop $0.01 under market.) If the guard returns False, **leave existing protection alone and wait** — report it as "marginally green, below lock threshold."
+
+Do this for every held long where `last > avg_cost` **and** `should_profit_lock(...)` is True:
 
 1. **Ratchet stop, never below cost.** Compute `ratchet = lib.indicators.ratchet_2bar_stop(df)` on the style timeframe, then `stop = lib.ibkr.profit_lock_stop(avg_cost, last, ratchet)` — this guarantees `avg_cost <= stop < last` (locks the ratchet level when it's inside the band; otherwise breakeven at cost, or one tick under market). The stop can only ever move **up** on later scans — never re-place it lower.
 2. **Target from the CHART, not the internet.** `target, src = lib.indicators.chart_target(df, ref_price=last)` — the nearest tested resistance above price, else the recent swing high, else an ATR measured-move. **Do not** use an analyst/price-target figure here; the target must come off the chart.

@@ -237,6 +237,26 @@ def prepare_scaled_bracket(ib, symbol, action, quantity, entry, stop,
     return contract, legs
 
 
+def should_profit_lock(avg_cost, last, atr, min_gain_atr=0.5):
+    """Is the gain big enough that a profit-lock stop would have ROOM to breathe?
+
+    Guard for the in-profit auto-lock. A position only marginally above cost
+    produces a lock stop pinned within a tick of market (profit_lock_stop clamps
+    to `last - tick`), which then fires on ANY downtick — converting a live swing
+    into an instant breakeven exit and destroying the thesis. BABA 2026-07-20:
+    +$3.35 open gain would have set a stop $0.01 under market.
+
+    So require the open gain to be at least `min_gain_atr` x ATR before locking.
+    Below that the position is "marginally green" = noise, not an earned gain:
+    leave existing protection alone and wait. Returns True when locking is safe.
+    """
+    if last <= avg_cost:
+        return False
+    if not atr or atr <= 0:
+        return False
+    return (last - avg_cost) >= min_gain_atr * float(atr)
+
+
 def profit_lock_stop(avg_cost, last, ratchet, tick=0.01):
     """Stop level for locking in a gain on an in-profit LONG (never below cost).
 
@@ -281,8 +301,13 @@ def ratchet_lock_oca(ib, symbol, quantity, stop, target, replace_trades=(),
     contract = qualify(ib, symbol)
     group = f"{symbol}_{tag}_{int(time.time())}"
     rid = ib.client.getReqId
+    # OCA SIBLINGS (no parent chain): both legs must be transmit=True. A held
+    # (transmit=False) leg is never released by a sibling's transmit=True — it
+    # would sit in PendingSubmit and then drop, leaving the position half-covered
+    # (BABA 2026-07-16: the stop vanished, only the target rested). The ocaGroup
+    # links them so a fill on one still cancels the other.
     stop_o = StopOrder(exit_action, quantity, stop, orderId=rid(),
-                       tif="GTC", ocaGroup=group, ocaType=1, transmit=False)
+                       tif="GTC", ocaGroup=group, ocaType=1, transmit=True)
     tgt_o = LimitOrder(exit_action, quantity, target, orderId=rid(),
                        tif="GTC", ocaGroup=group, ocaType=1, transmit=True)
     return [ib.placeOrder(contract, stop_o), ib.placeOrder(contract, tgt_o)]
