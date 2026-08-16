@@ -1,57 +1,10 @@
-# Core watchlist — one ticker per line. Lines starting with # are ignored.
-# Edit freely; the pre-market screener adds fresh candidates on top of these.
-AAPL
-MSFT
-NVDA
-AMD
-TSLA
-AMZN
-META
-GOOGL
-SPY
-QQQ
-CMPS
-KO
-NOW
-PLTR
-LITE
-FPS
-IBKR
-CLS
-MSTR
-MU
-SEDG
-ATAI
-GOOG
-MCD
-JPM
-JNJ
-BKSY
-NEE
-F
-NNE
-SMR
-VRT
-VICR
-AVGO
-TSM
-SMCI
-MRVL
-ARM
-ORCL
-CRWV
-CRWD
-CEG
-VST
-TLN
-OKLO
-GEV
-ETN
-ANET
-TEM
-RXRX
-ISRG
-IONQ
-RGTI
-RKLB
-ASTS
+# Watchlist — now OPTIONAL and empty by default (2026-08-10).
+#
+# The candidate universe is discovered DYNAMICALLY every run from the live
+# market — the full-market relative-volume scan + Yahoo Finance screens +
+# near-real-time pre-market movers — via lib.screener.dynamic_universe(),
+# unioned with your current IBKR holdings. There is no hardcoded core list.
+#
+# You may still PIN a few tickers here (one per line, no #) to force them into
+# every run's universe on top of what discovery finds — e.g. a name you want
+# tracked even on a quiet day. Leave empty to rely purely on live discovery.

@@ -347,6 +347,86 @@ def find_resistance(df, lookback=60, tolerance_pct=1.0, min_touches=2,
     return round(level, 2), touches
 
 
+def _swing_pivots(vals, wing, kind):
+    """Local extrema over a [-wing, +wing] window, deduped on plateaus by
+    requiring a strict move into the pivot. kind='high' -> swing highs
+    (resistance), 'low' -> swing lows (support)."""
+    n = len(vals)
+    piv = []
+    for i in range(wing, n - wing):
+        w = vals[i - wing:i + wing + 1]
+        if kind == "high" and vals[i] == w.max() and vals[i] > vals[i - 1]:
+            piv.append(float(vals[i]))
+        elif kind == "low" and vals[i] == w.min() and vals[i] < vals[i - 1]:
+            piv.append(float(vals[i]))
+    return piv
+
+
+def _cluster(pivots, tolerance_pct):
+    """Group pivots within tolerance_pct of each other -> [(level_mean, touches)]."""
+    clusters, used = [], [False] * len(pivots)
+    for a in range(len(pivots)):
+        if used[a]:
+            continue
+        band = [pivots[a]]
+        used[a] = True
+        for b in range(a + 1, len(pivots)):
+            if not used[b] and abs(pivots[b] - pivots[a]) / pivots[a] <= tolerance_pct / 100.0:
+                band.append(pivots[b])
+                used[b] = True
+        clusters.append((sum(band) / len(band), len(band)))
+    return clusters
+
+
+def level_ladder(df, lookback=60, tolerance_pct=1.0, wing=2, n=3,
+                 min_touches=1, ref_price=None, max_dist_pct=None):
+    """The game-plan-style S/R ladder: up to `n` support levels BELOW price and
+    `n` resistance levels ABOVE price, each nearest-first, as (level, touches).
+
+    Returns (supports, resistances). supports descend from price (nearest first),
+    resistances ascend from price. This is what lets a day-trade use the NEXT
+    resistance as a realistic target (R:R against structure) instead of the day
+    high — the fix for the recurring "target too close, R:R < 1" problem
+    (2026-08-05 game-plan analysis). Feed daily bars for multi-day S/R (matches a
+    hand-drawn game plan) or intraday bars for session levels.
+    """
+    sub = df.tail(lookback).reset_index(drop=True)
+    if len(sub) < 2 * wing + 1:
+        return [], []
+    ref = float(ref_price) if ref_price is not None else float(sub["close"].iloc[-1])
+    highs = sub["high"].to_numpy(dtype=float)
+    lows = sub["low"].to_numpy(dtype=float)
+
+    def _near(l):
+        return max_dist_pct is None or abs(l - ref) / ref <= max_dist_pct / 100.0
+    res = [(round(l, 2), t) for l, t in _cluster(_swing_pivots(highs, wing, "high"), tolerance_pct)
+           if t >= min_touches and l > ref and _near(l)]
+    sup = [(round(l, 2), t) for l, t in _cluster(_swing_pivots(lows, wing, "low"), tolerance_pct)
+           if t >= min_touches and l < ref and _near(l)]
+    res.sort(key=lambda x: x[0])            # nearest resistance first (just above price)
+    sup.sort(key=lambda x: -x[0])           # nearest support first (just below price)
+    return sup[:n], res[:n]
+
+
+def inflexion_bias(df, level=None, ref_price=None):
+    """Game-plan-style inflexion + directional bias. Returns (bias, level) where
+    bias is 'long' (price >= inflexion) or 'short' (below).
+
+    `level` is the inflexion pivot; if None it defaults to the session VWAP when
+    present on the frame, else the prior bar's close. Mirrors how a game plan uses
+    a single inflexion to define long/short bias for the day.
+    """
+    ref = float(ref_price) if ref_price is not None else float(df["close"].iloc[-1])
+    if level is None:
+        if "vwap" in df.columns:
+            level = float(df["vwap"].iloc[-1])
+        elif len(df) >= 2:
+            level = float(df["close"].iloc[-2])
+        else:
+            level = ref
+    return ("long" if ref >= level else "short"), round(float(level), 2)
+
+
 def is_breakout(df, level, confirm_pct=0.0):
     """True if the latest close has broken above `level` (by confirm_pct buffer).
 

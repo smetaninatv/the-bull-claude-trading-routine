@@ -69,6 +69,17 @@ Do this for every held long where `last > avg_cost` **and** `should_profit_lock(
 
 On a **subsequent** scan the position is already locked: only **raise** the stop if a new `profit_lock_stop(...)` is strictly higher (auto, de-risking); leave the target unless a `RAISE TARGET` proximity flag fires (step 4b — still a suggestion). If price falls back **below avg cost**, do not lower the stop below cost — the no-loss rule takes over (hold, catastrophic floor only).
 
+## Scalp exits (added 2026-08-10)
+
+When a position was opened as a scalp (`lib.scalps`, tagged in the journal), manage its exit by that setup's rule — these are faster/tighter than the 2-bar ratchet:
+- **rubber_band** → exit in **thirds**: ⅓ at 1R, ⅓ at 2R, final ⅓ into VWAP. Hard stop .02 below LoD; **2 strikes/day** then done.
+- **fashionably_late** → single **measured-move** target (LoD→cross projected above the cross); stop ⅓ of the VWAP→LoD distance. Exit if 9 EMA rolls back under VWAP.
+- **hitchhiker** → exit in **waves**: ½ into the first wave (first push stalls), ½ into the second. Stop .02 below the consolidation low.
+- **backside** → exit the **whole position at VWAP** (that's the target); stop .02 below the last higher-low; **one-and-done**.
+- **second_chance** → sell **½ at the pullback high**, then **trail the runner under the 9 EMA** (exit on a 1-min close below it); stop .02 below the turn candle. Abort if price breaks back below the reclaimed level and doesn't recover next bar.
+
+These are position-closing actions → still **human-approved** before transmitting (same as any exit), except a stop that only de-risks. Scalps are same-day: **close before the 4 PM ET bell** like any day trade.
+
 ## Day trade exits
 
 Day trades require intraday exit management — they use **5-min bars and a real-time price feed**, not daily bars. Two extra rules apply to day trades only:
@@ -96,7 +107,7 @@ Day trades require intraday exit management — they use **5-min bars and a real
    ```python
    from lib.realtime import get_intraday_bars, minutes_to_close
    ```
-2. **Pull portfolio + open orders:** `lib.ibkr.portfolio(ib)` (gives avg cost + unrealized P&L per holding) and `lib.ibkr.open_orders(ib)` (existing resting stops). If flat, report it and stop. **Auto-add every held ticker to the watchlist** via `lib.config.add_to_watchlist([...])` so research covers them too.
+2. **Pull portfolio + open orders:** `lib.ibkr.portfolio(ib)` (gives avg cost + unrealized P&L per holding) and `lib.ibkr.open_orders(ib)` (existing resting stops). If flat, report it and stop. (Held tickers no longer need adding to a watchlist — the universe is discovered dynamically each run via `lib.screener.dynamic_universe(extra=holdings)`, and every routine always pulls current holdings from `portfolio(ib)` directly.)
    - **Order integrity check:** for every open position, verify a resting stop order exists. **Read orders via `lib.ibkr.open_orders(ib)` — NOT raw `ib.openTrades()`.** On this Gateway `openTrades()` returns empty if read before `reqAllOpenOrders()` populates; `open_orders()` requests, waits, and retries so an empty result is real (2026-06-12: a single empty read would have falsely flagged every position UNPROTECTED). Only if `open_orders()` still shows no stop for a position → flag `UNPROTECTED`, re-place the stop at the catastrophic floor (or last known profit-lock level if above cost), and report it before continuing.
 3. **For each holding:**
    - Determine style (swing or day) from the journal / position tag.

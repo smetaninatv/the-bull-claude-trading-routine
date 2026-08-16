@@ -83,7 +83,53 @@ def discover(names=("gainers", "most_active"), per=25, market_scan_kwargs=None):
                 out.append(s)
     if not out:
         _warn(f"market_scan + screens {tuple(names)} returned 0 symbols — discovery "
-              f"DEGRADED to watchlist/holdings only; say so in the report")
+              f"DEGRADED to holdings only; say so in the report")
+    return out
+
+
+def dynamic_universe(names=("gainers", "most_active", "growth_tech"), per=25,
+                     min_relvol=0, include_movers=True, top_movers=12,
+                     extra=None):
+    """The fully-dynamic candidate universe — NO static watchlist (2026-08-10).
+
+    Searches the live market every call and unions every source already wired up:
+      1. the full-market relative-volume scan (`market_scan`, TradingView-style),
+      2. the Yahoo Finance discovery screens (`names`),
+      3. the near-real-time pre-market/intraday movers (`realtime.premarket_movers`).
+    Returns a deduped, order-preserving symbol list. Pass `extra` (e.g. current
+    holdings) to fold in names that must always be covered. `min_relvol=0` suits
+    pre-open (cumulative relvol under-reports before 9:30); raise it intraday.
+
+    Replaces `config.load_watchlist()` as the universe source — the watchlist file
+    is now only an optional user pin list (empty by default).
+    """
+    out, seen = [], set()
+
+    def _add(sym):
+        u = str(sym).upper().strip()
+        if u and u not in seen:
+            seen.add(u); out.append(u)
+
+    try:
+        for s in discover(names, per=per, market_scan_kwargs={"min_relvol": min_relvol}):
+            _add(s)
+    except Exception as e:
+        _warn(f"discover() failed in dynamic_universe: {e}")
+
+    if include_movers:
+        try:
+            from lib.realtime import premarket_movers
+            for m in premarket_movers(top_n=top_movers):
+                _add(m.get("sym") if isinstance(m, dict) else m)
+        except Exception as e:
+            _warn(f"premarket_movers() failed in dynamic_universe: {e}")
+
+    for s in (extra or []):
+        _add(s)
+
+    if not out:
+        _warn("dynamic_universe returned 0 symbols — market data feed likely down; "
+              "fall back to holdings only and say so in the report")
     return out
 
 

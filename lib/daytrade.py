@@ -16,6 +16,7 @@ Data via yfinance (near-real-time, prepost where needed). Returns plain dicts so
 callers/skills can rank and present without extra deps.
 """
 import datetime
+import math
 import warnings
 
 import pandas as pd
@@ -23,7 +24,8 @@ import pytz
 
 warnings.filterwarnings("ignore")
 
-from lib.indicators import add_vwap, atr_pct, opening_range, is_orb_breakout
+from lib.indicators import (add_vwap, atr_pct, opening_range, is_orb_breakout,
+                            level_ladder, inflexion_bias)
 
 _ET = pytz.timezone("US/Eastern")
 
@@ -99,12 +101,13 @@ def scan(symbols, spy_pct=None, rth_only_for_or=True):
             rvol = relative_volume(cum_vol, avg_vol, minutes_elapsed)
 
             # DAILY ATR% = the stock's real day-trade "juice" (5-min ATR% is tiny/useless here)
-            atrp = None
+            atrp = None; daily = None
             try:
                 import yfinance as yf
-                d = yf.Ticker(sym).history(period="1mo", interval="1d")
+                d = yf.Ticker(sym).history(period="3mo", interval="1d")
                 if d is not None and not d.empty:
                     d.columns = [c.lower() for c in d.columns]
+                    daily = d
                     atrp = atr_pct(d, 14) if len(d) >= 14 else atr_pct(d, max(2, len(d) - 1))
             except Exception:
                 pass
@@ -121,6 +124,39 @@ def scan(symbols, spy_pct=None, rth_only_for_or=True):
                 orb = is_orb_breakout(src, or_high) if or_high else None
 
             rs = relative_strength(gap, spy_pct)
+
+            # --- LEVEL LADDER + INFLEXION (game-plan-style S/R for real targets) ---
+            # Source: multi-day 15-min bars — the granularity that reproduces a
+            # hand-drawn game plan's intraday S/R (daily bars give S/R too macro
+            # for a day trade; 2026-08-05 game-plan calibration). max_dist_pct
+            # drops stale far levels.
+            supports = []; resistances = []; next_res = None; near_sup = None
+            bias = None; inflex = None; rr_to_res = None
+            try:
+                import yfinance as yf
+                ld = yf.Ticker(sym).history(period="5d", interval="15m")
+                if ld is not None and len(ld) >= 10:
+                    ld.columns = [c.lower() for c in ld.columns]
+                    sup, res = level_ladder(ld, lookback=200, wing=2, tolerance_pct=0.6,
+                                            n=3, ref_price=last, max_dist_pct=8.0)
+                    supports = [lv for lv, _ in sup]; resistances = [lv for lv, _ in res]
+                    next_res = resistances[0] if resistances else None
+                    near_sup = supports[0] if supports else None
+            except Exception:
+                pass
+            # bias off the intraday VWAP when valid, else the prior daily close
+            inflex = vwap if (vwap and not math.isnan(vwap)) else (
+                float(daily["close"].iloc[-2]) if daily is not None and len(daily) >= 2 else last)
+            if inflex is not None and not (isinstance(inflex, float) and math.isnan(inflex)):
+                bias = "long" if last >= inflex else "short"
+                inflex = round(float(inflex), 2)
+            # R:R using structure: entry ~ nearest support (buy the pullback), stop
+            # just under it, target = next resistance. The game-plan fix for the
+            # too-close day-high target that made every R:R < 1.
+            if next_res and near_sup and next_res > near_sup:
+                entry = near_sup; stop = round(near_sup * 0.985, 2)
+                if entry > stop:
+                    rr_to_res = round((next_res - entry) / (entry - stop), 2)
 
             # --- composite score (0-10), interpretable ---
             score = 0; notes = []
@@ -145,6 +181,9 @@ def scan(symbols, spy_pct=None, rth_only_for_or=True):
                 "rvol": rvol, "atr_pct": atrp, "above_vwap": above_vwap,
                 "vwap": round(vwap, 2) if vwap else None,
                 "or_high": or_high, "orb_breakout": orb, "rs_vs_spy": rs,
+                "support": supports, "resistance": resistances,
+                "next_res": next_res, "near_sup": near_sup,
+                "bias": bias, "inflexion": inflex, "rr_to_res": rr_to_res,
                 "score": min(10, score), "notes": ", ".join(notes),
             })
         except Exception:

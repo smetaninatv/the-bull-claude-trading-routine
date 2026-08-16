@@ -60,6 +60,24 @@ The entry is given as a **price zone** (a pullback to VWAP / 8 EMA / recent low)
 
 ---
 
+## Intraday scalping setups (auto-detected)
+
+On top of the "above-VWAP, near-8-EMA, R:R ≥ 2" day-trade gate, the routines
+auto-detect five specific intraday scalp patterns (`lib.scalps`) on 1-minute bars
+each open. A match becomes a **sized, approval-ready candidate** with a defined
+entry/stop/target — it's never auto-fired, and on exit each is managed by its
+*own* rule.
+
+- **Rubber Band** *(fade the flush)* — after a stock stretches far from VWAP on accelerating, sloppy selling, buy the first green candle that snaps back through the prior 2 highs. Stop .02 below the day's low; scale out in thirds at 1R, 2R, and into VWAP. Best with RVOL > 5 and a 3+ ATR extension. *Don't fade a cleanly trending market.*
+- **Fashionably Late** *(momentum turn)* — when a rising 9-EMA crosses up through a flat/falling VWAP after a bottom, enter the cross. Stop a third of the way back toward the low; target one measured move (low→cross) above the cross. ~3:1.
+- **HitchHiker** *(ride the buy program)* — after an opening drive that *holds* and coils in the top third of the day's range (5–20 min), buy the break of the coil on rising volume. Stop .02 below the coil low; exit in two waves.
+- **Back$ide** *(squeeze back to VWAP)* — a stock stretched *below* VWAP that starts printing higher highs + higher lows above a rising 9-EMA: buy the range break, target VWAP as trapped shorts cover. Stop below the last higher-low; one-and-done.
+- **Second Chance** *(breakout retest)* — after price breaks a level and pulls back to retest it as new support, buy the confirmation candle. Stop .02 below the retest low; take half at the pullback high and trail the rest under the 9-EMA.
+
+Candidates come from a **fully dynamic universe** — discovered live every run from the whole market (relative-volume scan + Yahoo screens + pre-market movers) plus your holdings; there's no fixed watchlist. Levels for targets/stops come from a **game-plan-style S/R ladder** (`lib.indicators.level_ladder`), and any position that crosses into profit is **auto-locked** with a ratchet stop + chart target.
+
+---
+
 ## Position sizing (how many shares)
 
 Always the same formula, so every trade risks the same small slice of the account:
@@ -152,7 +170,7 @@ Paper vs live is the **login**, not the port (paper = `DU…`, live = `U…`).
 `connect()` defaults to `require_paper=True` and refuses a live account unless explicitly overridden.
 
 ## Configure
-- `config/watchlist.txt` — core tickers you always want checked (the screener adds more; held names are auto-added).
+- `config/watchlist.txt` — **optional** pin list, empty by default. The candidate universe is discovered dynamically from the live market each run (`lib.screener.dynamic_universe()`) + your current holdings; pin a ticker here only to force it into every run.
 - `config/risk.yaml` — **set `account.size_usd` to your balance**; tune risk %, position caps, daily-loss limit, catastrophic %.
 - `config/strategy.yaml` — signal thresholds: VWAP, dollar-volume floors, R:R minimums, trend-day score, ratchet lookback, VWAP-trail buffer, stale-order handling, `no_exit_at_loss`.
 

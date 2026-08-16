@@ -6,7 +6,7 @@
 ## 1. Summary of the strategy
 
 ### Universe
-- Core watchlist (`config/watchlist.txt`) + pre-market screener (top % gainers, most active).
+- Dynamic universe discovered live each run (`lib.screener.dynamic_universe()`: full-market relative-volume scan + Yahoo screens + pre-market movers) + current holdings. No hardcoded watchlist; `config/watchlist.txt` is an optional pin list (empty by default).
 - All currently-held tickers are always included (research + exit scan).
 
 ### Entry — Swing (daily chart)
