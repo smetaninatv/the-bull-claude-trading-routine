@@ -112,6 +112,103 @@ def entry_quality(df, extended_atr=4.0, pullback_atr=2.0):
             "buyable": buyable, "ideal_entry": ideal_entry, "label": label, "reason": reason}
 
 
+def reversion_quality(df, drop_atr=2.5, rsi_os=35, lookback_high=60,
+                      knife_gate_200=True):
+    """WHEN a beaten-down name is a BUYABLE DIP vs a falling knife (2026-10-20).
+
+    The mean-reversion complement to entry_quality (which buys strength in
+    Stage-2 uptrends). Our realized winners — CCL +797, COIN +233, NBIS +100,
+    BABA +40, OKTA +39, the RDDT/UBER recovery — came from buying names that
+    dropped HARD then reverted UP. entry_quality REJECTS those (a big drop is
+    NOT_STAGE2), so it structurally misses the setups we actually win on. This
+    scores them instead.
+
+    Separating 'oversold bounce' from 'falling knife' is the whole game:
+      below20_atr : ATRs the price sits BELOW the 20 SMA (how stretched the drop)
+      off_high    : % below the `lookback_high`-bar high (size of the decline)
+      above_200   : QUALITY gate — still above the 200 SMA = a pullback in a long
+                    uptrend, not a broken company. The single best knife filter.
+      oversold    : RSI(14) <= rsi_os
+      stabilizing : the 'likely to grow' tell — RSI turning UP from the prior bar
+                    AND/OR an up-close that reclaims the prior bar's high (a higher
+                    low forming) — i.e. the decline's momentum is easing.
+      buyable_dip : dropped hard AND quality AND stabilizing (the turn has started)
+      ideal_entry : buy on the stabilization (the reclaim), NOT while still falling
+      target      : the mean it fell from (20 SMA, or 50 SMA if below both) =
+                    the reversion target; stop just under the recent swing low
+      label       : BUYABLE_DIP | OVERSOLD_WAIT | FALLING_KNIFE | NOT_DROPPED
+
+    `knife_gate_200=False` relaxes the quality gate to "above the 200 SMA OR the
+    200 SMA is still rising" — catches names that dipped just below a rising 200
+    (some of our holds recovered from there). Expects add_indicators() columns.
+    Returns a dict (mirrors entry_quality's shape).
+    """
+    if len(df) < 2:
+        return {"label": "NOT_DROPPED", "buyable_dip": False, "reason": "insufficient data"}
+    last = df.iloc[-1]; prev = df.iloc[-2]
+    c = float(last["close"]); a = float(last["atr"]) or 1e-9
+    ma20 = float(last["sma20"]); s50 = float(last["sma50"]); s200 = float(last["sma200"])
+    rsi_now = float(last["rsi"]); rsi_prev = float(prev["rsi"])
+    hi = float(df["high"].tail(lookback_high).max())
+    lo = float(df["low"].tail(10).min())
+
+    below20_atr = (ma20 - c) / a                 # positive = below the mean
+    off_high    = (hi - c) / hi * 100 if hi else 0.0
+    above_200   = c > s200
+    oversold    = rsi_now <= rsi_os
+    # the 'turn has started' tell: RSI leaving the oversold zone, OR a green
+    # up-bar that also makes a higher low than the prior bar (a reversal bar).
+    rsi_cross_up = (rsi_prev <= rsi_os) and (rsi_now > rsi_prev)
+    up_bar       = (c > float(prev["close"])) and (c >= float(last["open"]))
+    higher_low   = float(last["low"]) > float(prev["low"])
+    # the hard knife filter: is it STILL carving fresh lows? (vs a higher low)
+    low20       = float(df["low"].tail(20).min())
+    fresh_low   = c <= low20 * 1.01              # within 1% of a 20-day low = still knifing
+    stabilizing = (rsi_cross_up or (up_bar and higher_low)) and not fresh_low
+
+    dropped = (below20_atr >= drop_atr) or (off_high >= 12)
+    ideal_entry = round(c, 2)                              # enter on the reversal bar's close
+    # stop: just under the immediate swing low (last 3 bars) — tight, so the
+    # reversion R:R is real (the 20-day low was too far below to be tradeable).
+    swing_low = float(df["low"].tail(3).min())
+    stop = round(swing_low * 0.99, 2)
+    risk = ideal_entry - stop
+    # target: the first reference ABOVE entry that is >= 1.5R away (a real reward)
+    # among the means it fell from and the recent high; else a 2R measured move.
+    refs = sorted(m for m in (ma20, s50, s200, hi) if m > ideal_entry)
+    target = next((round(m, 2) for m in refs if (m - ideal_entry) >= 1.5 * risk),
+                  round(ideal_entry + 2 * risk, 2) if risk > 0 else (round(refs[0], 2) if refs else ideal_entry))
+    rr = round((target - ideal_entry) / risk, 2) if risk > 0 else 0.0
+
+    # QUALITY is a soft flag, not a hard gate — our own winners (RDDT, UBER,
+    # COIN, NBIS, BABA) recovered from BELOW their 200 SMA, so excluding
+    # below-200 names would reject our actual edge. knife_gate_200=True restores
+    # the strict "above 200 only" gate for a more conservative dip list.
+    q200 = "above 200 SMA" if above_200 else "below 200 SMA (deeper-value dip)"
+
+    if not dropped:
+        label, buyable, reason = "NOT_DROPPED", False, \
+            "not meaningfully below the mean — not a dip setup"
+    elif fresh_low:
+        label, buyable, reason = "FALLING_KNIFE", False, \
+            f"down {off_high:.0f}%, still carving fresh 20-day lows (RSI {rsi_now:.0f}) — knife, do NOT catch"
+    elif not stabilizing:
+        label, buyable, reason = "OVERSOLD_WAIT", False, \
+            f"down {off_high:.0f}% ({below20_atr:.1f} ATR below the 20 SMA, RSI {rsi_now:.0f}) but no reclaim yet — wait for the turn"
+    elif knife_gate_200 and not above_200:
+        label, buyable, reason = "OVERSOLD_WAIT", False, \
+            f"turning up (RSI {rsi_now:.0f}, higher low) but {q200} — strict 200-gate holds it back; watch"
+    else:
+        label, buyable, reason = "BUYABLE_DIP", True, \
+            f"down {off_high:.0f}%, higher low + reclaim, RSI {rsi_now:.0f} turning up, {q200} — buyable reversion toward {target}"
+
+    return {"below20_atr": round(below20_atr, 2), "off_high_pct": round(off_high, 1),
+            "above_200": above_200, "rsi": round(rsi_now, 1), "oversold": oversold,
+            "stabilizing": stabilizing, "fresh_low": fresh_low, "buyable_dip": buyable,
+            "ideal_entry": ideal_entry, "target": target, "stop": stop, "rr": rr,
+            "label": label, "reason": reason}
+
+
 def add_vwap(df):
     """Add session VWAP to an INTRADAY DataFrame (e.g. 5-min bars).
 

@@ -56,6 +56,20 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
    ```
    Render as the **Day-trade scan board** in the report (see step 8), with a **Driver** column and **Pros / Cons**. The driver is decisive context: it exposes when a gap is on a *dubious* catalyst (a "could rally 89%" pump, an analyst favoring a competitor, or **high RVOL with NO news = pump risk**) vs. a real one. Lead the shortlist with high-score names whose driver is legit AND that pass the entry gates. **Caveat:** premarket (before 9:30 ET) RVOL/gap/ATR%/RS/driver are meaningful but VWAP/ORB aren't formed yet — note that, and re-run `scan()+annotate()` in market-open for the live board.
 
+1d. **ALWAYS print the dip-reversion board too (2026-10-20) — our actual edge.** The day/swing boards above hunt *momentum* (names going up now); but our realized winners (CCL +797, COIN +233, NBIS +100, BABA +40, OKTA +39, the RDDT/UBER recovery) came from buying names that **dropped hard then reverted UP**. `entry_quality` structurally rejects those (a big drop is NOT_STAGE2), so this board is required every run to surface them:
+   ```python
+   from lib.screener import oversold_reversion
+   from lib.ibkr import portfolio  # fold our own underwater holds in as candidates
+   holds = [p.contract.symbol for p in portfolio(ib)]
+   # knife_gate_200=False = our style (recoveries from BELOW the 200 SMA, like RDDT);
+   # set True for a stricter above-200-only list. include_wait=True adds a watchlist.
+   dip = oversold_reversion(extra=holds, per=30, knife_gate_200=False, include_wait=False)
+   for r in dip[:10]:
+       print(f"{r['sym']:6} {r['label']} off-high={r['off_high_pct']}% RSI={r['rsi']} "
+             f"a200={r['above_200']} entry={r['ideal_entry']} stop={r['stop']} tgt={r['target']} RR={r['rr']}")
+   ```
+   Render as the **Dip-reversion board** in the report: `symbol | off-high% | RSI | above-200? | entry | stop | target | R:R | reason`. Each is a mean-reversion long: it dropped (off-high% / ATRs below the 20 SMA), the decline is **stabilizing** (RSI leaving oversold or a higher-low reversal bar — NOT still carving fresh 20-day lows, which labels FALLING_KNIFE and is excluded), entry on the reversal bar, stop under the swing low, target = the mean it fell from. **Apply judgment:** `a200=False` names are deeper-value/higher-beta (our edge, but riskier — many are small-cap crypto/quantum/solar names on this board); prefer liquid, quality names and a real or improving catalyst. These are TP-only-friendly (defined reversion target). This board complements — does not replace — the momentum boards; a name can be a legit buy from either.
+
 2. **Build the candidate universe — FULLY DYNAMIC, no hardcoded watchlist (2026-08-10).** The universe is searched live every run:
    ```python
    holdings = [p.contract.symbol for p in lib.ibkr.portfolio(ib)]

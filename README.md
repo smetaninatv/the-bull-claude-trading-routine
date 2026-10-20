@@ -78,6 +78,22 @@ Candidates come from a **fully dynamic universe** — discovered live every run 
 
 ---
 
+## Dip-reversion — buying the drop that's about to bounce
+
+The swing and intraday rules above hunt *momentum* — names going **up** with the trend behind them. But a lot of real winners come the other way: a quality name that **dropped hard, then reverts up**. The breakout rules structurally reject those (a big drop is, by definition, not a Stage-2 uptrend), so a separate selector finds them (`lib.indicators.reversion_quality` + `lib.screener.oversold_reversion`).
+
+It screens the **losers** (Yahoo `day_losers` / `most_shorted` + your own underwater holds) and labels each:
+
+- **`BUYABLE_DIP`** — dropped meaningfully (ATRs below its 20-day average, or well off its recent high) **and the decline is stabilizing** (RSI turning up out of oversold, or a higher-low reversal bar). Entry on the reversal bar, stop just under the swing low, **target = the mean it fell from** (the 20/50/200-day average above it). A defined reversion target — pairs naturally with a take-profit-only order.
+- **`OVERSOLD_WAIT`** — beaten down but the turn hasn't started yet. Watch, don't buy.
+- **`FALLING_KNIFE`** — *still carving fresh lows.* **Excluded.** The single most important job here is not catching these.
+
+The one real knob is **quality**: `knife_gate_200`. Strict (`True`) only takes dips that are *still above* their 200-day average — a pullback inside a long uptrend. Relaxed (`False`, the default) also allows recoveries from *below* the 200 — higher-beta, but historically where a lot of the recovery winners came from. Either way the board is **candidates, not blind buys** — it leans toward small, volatile names, so judgment (liquidity, a real catalyst) still decides.
+
+This board is printed **alongside** the momentum boards every pre-market and market-open run; a name can be a legitimate long from either.
+
+---
+
 ## Position sizing (how many shares)
 
 Always the same formula, so every trade risks the same small slice of the account:

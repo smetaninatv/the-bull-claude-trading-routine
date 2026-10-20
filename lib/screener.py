@@ -201,6 +201,47 @@ def market_scan_symbols(**kwargs):
     return [r["symbol"] for r in market_scan(**kwargs)]
 
 
+def oversold_reversion(extra=None, per=40, knife_gate_200=True, want=("BUYABLE_DIP",),
+                       include_wait=False):
+    """Discover beaten-down names that are turning back up — the mean-reversion
+    board (2026-10-20). Complements discover()/dynamic_universe(), which only look
+    at gainers/most-active (momentum). This looks at the LOSERS.
+
+    Pulls Yahoo's `day_losers` + `most_shorted` screens (the names that DROPPED),
+    unions `extra` (e.g. current holdings — our own underwater names are prime
+    reversion candidates), runs each through indicators.reversion_quality on daily
+    bars, and returns the ones that are BUYABLE_DIP (dropped hard, still quality,
+    and the turn has started). Set `include_wait=True` to also return OVERSOLD_WAIT
+    names (dropped & oversold but no reclaim yet — a watchlist).
+
+    Returns a list of dicts: {sym, last, label, off_high_pct, below20_atr, rsi,
+    above_200, ideal_entry, target, stop, rr, reason}, sorted best-first
+    (buyable first, then by R:R). Degrades gracefully (skips unreadable names).
+    """
+    from lib.indicators import add_indicators, reversion_quality
+    want = set(want) | ({"OVERSOLD_WAIT"} if include_wait else set())
+    cand, seen = [], set()
+    for s in (list(yahoo_screen("losers", per)) + list(yahoo_screen("most_shorted", per))
+              + [str(x).upper() for x in (extra or [])]):
+        u = str(s).upper().strip()
+        if u and u not in seen:
+            seen.add(u); cand.append(u)
+    out = []
+    for sym in cand:
+        try:
+            df = yahoo_bars(sym, "1y", "1d")
+            if df is None or len(df) < 210:
+                continue
+            df = add_indicators(df)
+            rq = reversion_quality(df, knife_gate_200=knife_gate_200)
+            if rq.get("label") in want:
+                out.append({"sym": sym, "last": round(float(df["close"].iloc[-1]), 2), **rq})
+        except Exception:
+            continue
+    out.sort(key=lambda r: (r["label"] != "BUYABLE_DIP", -(r.get("rr") or 0)))
+    return out
+
+
 def yahoo_bars(symbol, period="1y", interval="1d"):
     """Historical OHLCV from Yahoo as a DataFrame matching lib.data's format.
 
