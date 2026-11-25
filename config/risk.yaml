@@ -8,6 +8,10 @@ account:
                             # the USD buying power is actually a bit higher, so positions are
                             # slightly undersized (safe). Refine with the live EURUSD rate if desired.
   data_mode: delayed        # delayed | realtime  (paper + delayed is free)
+  # Live trading switch. true = connect() accepts a LIVE (U...) Gateway login
+  # (real money; every order still needs explicit approval and every ask says
+  # LIVE). false = paper-only: connect() refuses a live login.
+  allow_live: true
 
 # Shared guardrails (apply across the whole account):
 limits:

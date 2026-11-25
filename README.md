@@ -79,8 +79,8 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-1. Install and launch **IB Gateway**, logged into the **paper** account (free,
-   delayed data).
+1. Install and launch **IB Gateway**, logged into the paper account (free,
+   delayed data) or your live account (see below).
 2. Gateway → Configure → Settings → API: enable *ActiveX and Socket Clients*,
    trust `127.0.0.1`, and set the socket port to match `lib.ibkr.DEFAULT_PORT`
    (**4001** here; Gateway's paper default is often 4002 — keep them consistent).
@@ -91,7 +91,9 @@ pip install -r requirements.txt
    ```
 
 Paper vs live is decided by the **login** (paper = `DU…`, live = `U…`), not the
-port. `connect()` refuses a live account unless explicitly overridden.
+port. Live trading is controlled by `account.allow_live` in `config/risk.yaml`:
+`true` accepts a live login (every connection prints a **LIVE — REAL MONEY**
+banner and every approval ask says so), `false` refuses it (paper only).
 
 ## Configure
 

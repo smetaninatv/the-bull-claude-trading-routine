@@ -54,8 +54,15 @@ def save_chart(df, symbol, date_str, title="", entry=None, stop=None, target=Non
         if target is not None: colors.append("blue")
         hl = dict(hlines=hlines, colors=colors, linestyle="--", linewidths=0.8)
 
+    # Newer mplfinance validators reject addplot=None / hlines=None — only pass
+    # them when there is something to draw.
+    extra = {}
+    if addplots:
+        extra["addplot"] = addplots
+    if hl:
+        extra["hlines"] = hl
     mpf.plot(
-        d, type="candle", style="charles", addplot=addplots or None,
-        volume=True, title=title or symbol, hlines=hl, savefig=out,
+        d, type="candle", style="charles",
+        volume=True, title=title or symbol, savefig=out, **extra,
     )
     return out
