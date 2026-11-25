@@ -1,99 +1,200 @@
-# Trading Strategy — Summary & Assessment
+# Trading Strategy
 
-> Canonical description of the strategy the routines implement, plus an honest
-> critique. Update this when the rules change. Referenced by `CLAUDE.md`.
+> **Canonical source for the trading rules.** README and CLAUDE.md link here
+> instead of restating rules; skills describe *procedure* and cite config keys.
+> Numbers live in `config/risk.yaml` and `config/strategy.yaml` — this file
+> names the keys, so update the YAML (not this doc) when tuning a threshold.
 
-## 1. Summary of the strategy
-
-### Universe
-- Dynamic universe discovered live each run (`lib.screener.dynamic_universe()`: full-market relative-volume scan + Yahoo screens + pre-market movers) + current holdings. No hardcoded watchlist; `config/watchlist.txt` is an optional pin list (empty by default).
-- All currently-held tickers are always included (research + exit scan).
-
-### Entry — Swing (daily chart)
-1. **Macro trend filter — 200 SMA:** long only when price is above the 200 SMA.
-2. **Momentum/entry — 8 EMA:** enter on price holding above a rising 8 EMA, or a pullback to the 8 EMA that resumes.
-3. **Resistance breakout:** a horizontal level tested ≥ 2 times, then a breakout above it.
-
-### Entry — Day (5-min chart)
-1. **VWAP:** long bias when price is above session VWAP; entries on a reclaim/hold of VWAP.
-2. **Dollar volume:** 3-bar average dollar volume ≥ $5M per 5-min bar (`price × volume`). Replaces the raw 70k share floor — 70k shares is a different thing for a $10 stock vs a $500 stock. Mid-day (> 60 min after open): raise threshold to $8M.
-3. **EMA8 proximity:** price within 2% of EMA8. More than 2% below EMA8 = weakening momentum, flag but allow. More than 5% below = skip.
-4. **R:R:** at least 2.0 at market-open; at least 3.0 mid-day (thinner tape, higher edge required).
-5. **Entry price discipline — no chasing (added 2026-06-15).** The entry is a **non-marketable limit at the pullback level** (`VWAP + entry_limit_vwap_buffer_atr × ATR`, default 0.1×ATR — just above VWAP), NOT a marketable limit at the current price. If price is already more than `max_entry_above_vwap_atr × ATR` (default 0.2×) above VWAP, the move has run → don't chase; wait for the pullback to the limit or skip. *Why:* AMD 2026-06-15 was bought at $553.57 (marketable) when VWAP was $548 — ~$5 / 0.25×ATR above → overpaid, then faded. Trade-off: some setups won't fill (a missed trade beats an overpaid one).
-
-### Entry — Dip-reversion / mean reversion (daily chart, added 2026-10-20) — applies to BOTH day and swing
-The Swing and Day rules above both hunt **momentum** (price moving up with the trend behind it). This is the deliberate complement: buying a quality name that **dropped hard and is reverting up**. It was added because the realized winners skew mean-reversion — CCL +$797, COIN +$233, NBIS +$100, BABA +$40, OKTA +$39, the RDDT/UBER recovery grind — yet the momentum gate (`entry_quality`) structurally *rejects* those (a big drop is `NOT_STAGE2`), so the scanner was pointed the wrong way for the book's actual edge.
-
-- **Selector:** `lib.indicators.reversion_quality(df)` on daily bars labels each name **`BUYABLE_DIP` / `OVERSOLD_WAIT` / `FALLING_KNIFE` / `NOT_DROPPED`**. **Discovery:** `lib.screener.oversold_reversion()` screens the LOSERS (Yahoo `day_losers` + `most_shorted` + current holdings — our own underwater names are prime candidates) through it and returns a ranked `BUYABLE_DIP` board.
-- **What makes it `BUYABLE_DIP`:** (1) *dropped* — ≥ `drop_atr` (2.5) ATRs below the 20 SMA, or ≥ 12% off the 60-bar high; AND (2) *stabilizing* — RSI(14) leaving oversold (≤35, turning up) **or** a higher-low up-bar reversal; AND NOT (3) *fresh lows* — a close within 1% of the 20-day low is a **`FALLING_KNIFE`** and is **excluded** (the single most important filter — never catch one). A name that dropped but hasn't turned is **`OVERSOLD_WAIT`** (watch, don't buy).
-- **Levels:** entry on the reversal bar's close; **stop** just under the immediate swing low (last 3 bars) — tight, so R:R is real; **target** = the nearest moving average it fell from that sits ≥ 1.5R above entry (the mean it reverts to), else a 2R measured move. A *defined* reversion target → pairs naturally with a take-profit-only order (`no_exit_at_loss` style).
-- **The one knob — quality (`knife_gate_200`):** strict (`True`) only takes dips still *above* the 200 SMA (a pullback inside a long uptrend). Relaxed (`False`, the default) also allows recoveries from *below* the 200 — this is the book's real edge (RDDT/UBER/COIN/NBIS/BABA all recovered from below their 200 SMA; the strict gate would have rejected every one), but it surfaces higher-beta names, so judgment on liquidity + a real/improving catalyst still decides. The board is **candidates, not blind buys** — it leans toward small, volatile names.
-- **Day vs swing use:** the selector runs on **daily bars**, so a `BUYABLE_DIP` is primarily a **swing** reversion candidate (hold for the move back to the mean). The *same name* can also be **day-traded** — buy its intraday reclaim of VWAP / the prior-bar high (the `backside` / `rubber_band` scalps already cover that intraday mechanic). Printed alongside the momentum boards every pre-market and market-open run (premarket SKILL step 1d); a name can be a legitimate long from either lens.
-
-### Day-trade stock selection (`lib/daytrade.py`, added 2026-06-15)
-Beyond the entry gates above, candidates are ranked by `lib.daytrade.scan()` on the signals that actually pick intraday winners — **RVOL** (relative volume vs the stock's own norm; the single best "is this the right stock today" metric, >2-3 = active/hot), **daily ATR%** (juice; ~2-8% sweet spot), **above-VWAP**, **Opening-Range Breakout** (first-15-min high break), **relative strength vs SPY** (leadership), and **gap%**. Each name gets a 0-10 score + notes. RSI/MACD/Bollinger are deliberately excluded — they lag on 5-min bars and misfire intraday. Lead the shortlist with high-RVOL leaders that also pass the entry gates, not just the biggest gappers.
-
-### Position sizing & risk (`config/risk.yaml`)
-- **Swing — fixed fractional:** 1.0% of account risked per trade, sized off stop distance; capped at 20% of account.
-- **Day — own higher %s (user-set 2026-06-15):** risk **`day_trading.risk_per_trade_pct` 1.3%** (~$600 @ $47k) and capital cap **`day_trading.max_position_pct` 43%** (~$20k). `shares = min(risk% × account / |entry−stop|, max_position_pct% × account / entry)`. Tight stop (~2-3%) → hits the 43% capital cap (~$20k deployed); wide stop (~5%) → trims to hold the 1.3% risk cap. All percentages of account (no hardcoded $) — scales if the account changes. Overrides the global 20% cap for day trades only.
-- **Max concurrent positions:** day 3 / swing 5.
-- **Daily loss limit:** 3% (~$1,400) → stop opening new trades for the day. (≈ two max-loss day trades, so a couple of $600 losers ends day-trading for the session — the backstop on the bigger size.)
-
-### Exits (`config/strategy.yaml`, `config/risk.yaml`)
-- **Hard catastrophic stop (floor):** placed at entry at −`catastrophic_stop_pct` (default 8%) from entry; **always rests at the broker and is always honored**, even under `no_exit_at_loss`. Sizing is done off THIS stop, so risk-per-trade is real.
-- **Day trade trailing stop (revised 2026-06-12):** the **2-bar ratchet is primary** (on 5-min bars); the VWAP-trail is only a **floor** beneath it. Combined in `lib.indicators.day_trade_stop()` = `max(2bar_ratchet, VWAP − 1.5×ATR, current_resting_stop)`, up-only. The resting stop activates once the level reaches `>= avg_cost`. *Why the change:* on AMD 2026-06-12 the VWAP-trail-as-primary (0.5×ATR buffer) exited at the bottom of a flush that immediately reversed +$10; the 2-bar ratchet held better and the buffer was widened to 1.5×ATR. The 8% catastrophic floor remains the hard minimum.
-- **Post-stop re-entry (trend days, score ≥ 8):** after a day-trade stop fires, if the stock reclaims and holds VWAP within 60 min, re-entry is flagged (thesis intact; the stop caught a shakeout). Needs approval — never auto-entered.
-- **No fixed target on a trend day:** when `day_trade_conditions` score ≥ 8, day entries carry **no fixed limit target** — the trailing stop runs the winner. A fixed limit caps the move and makes the trade binary (AMD $524 limit vs a $521.69 day high that would have trailed higher).
-- **ATR noise-band stop placement:** initial protective stops must clear `1.5×ATR` (`lib.indicators.noise_band()`); never place a stop on a round number inside the consolidation band (AMD $512 sat mid-range and was shaken out).
-- **Ratcheting 2-bar trailing stop (swing):** initial reference = lowest low of past 2 bars at entry; each new 2-bar high raises the stop to the 2-bar low; **only moves up**; exit when price hits it. Applies to swing positions on daily bars.
-- **Secondary safety exits:** swing close below 200 SMA; day loss of VWAP (suppressed while underwater per the rule below, but the catastrophic floor still applies).
-- **`no_exit_at_loss: true`** — don't exit on small dips/normal stops while underwater (hold and wait for recovery) — BUT bounded by the catastrophic floor, so max loss per position is capped.
-
-### Unfilled resting entry orders (added 2026-06-12)
-A resting **BUY** order whose symbol isn't yet a position is a *pending entry* — it must be re-validated, not left to fill blindly off a stale limit. **market-open** (step 1c) and **exit-scan** (step 4c) both check them: **CANCEL** if the setup invalidated (lost 200 SMA / 8 EMA / VWAP) or it's stale (`orders.stale_entry_sessions`, default 3); **RE-ADJUST** if the setup holds but the level drifted; **GAP-THROUGH** flag if price gapped below the limit (imminent fill into weakness); and a **pre-weekend** sweep (`orders.cancel_unfilled_before_weekend`) that flags every unfilled entry Friday so a Monday gap can't fill a stale limit — especially correlated names filling at once (TSM/MRVL/CRWD 2026-06-12). All are **suggestions needing approval** — cancelling/moving an entry is not de-risking, so it's never automatic. Prior-session orders are cancelled with the master client (`connect(client_id=0)`; default client gets Error 10147).
-
-### Execution model
-- IB Gateway + `ib_async`, paper-first. **Human-in-the-loop:** orders prepared, transmitted only on approval (exception: protective stop-raises auto-apply).
-- Assisted-trigger (laptop not always on). 5 scheduled routines (CET): pre-market research, market-open, hourly exit scan, daily summary, weekly review.
-- Annotated charts + trade journal for every decision.
+Long-only US equities. Three lenses find candidates; one sizing model and one
+exit model manage them. Everything is human-approved except stop raises and
+in-profit locks, which only de-risk.
 
 ---
 
-## 2. Assessment — is it good or bad?
+## 1. Universe
 
-**Overall: a sound, conventional trend-following core wrapped around one rule that undermines the whole risk model.** The entry logic, sizing math, and process discipline are solid and follow recognized best practice. The `no_exit_at_loss` rule is the serious problem — it converts a defined-risk system into an undefined-risk one. Fix that and this is a reasonable retail swing/day framework.
+- **Fully dynamic**, rebuilt every run by `lib.screener.dynamic_universe()`:
+  full-market relative-volume scan (`market_scan`) + Yahoo screens (gainers /
+  most-active / growth-tech) + pre-market movers.
+- **Always unioned with current IBKR holdings.**
+- `config/watchlist.txt` is an optional pin list, empty by default. No
+  hardcoded core list anywhere.
+- If discovery degrades, the screener prints `[screener] WARN`; the report must
+  say "live market discovery unavailable — holdings only".
 
-### What's good (keep)
-- **Trend-aligned entries.** The 200 SMA filter + 8 EMA timing is a legitimate, widely-used combination — trade with the macro trend, time with short-term momentum.
-- **Fixed-fractional position sizing.** Sizing off stop distance so each trade risks a constant % is textbook risk management.
-- **Let winners run via a trailing stop.** The ratcheting 2-bar stop is a clean way to ride trends and not cap upside.
-- **Circuit breaker.** A daily loss limit is a good behavioral guardrail.
-- **Process: journaling, weekly review, paper-first, human approval.** These are exactly the habits that separate disciplined traders from gamblers.
+## 2. Entry lenses
 
-### Critical/high issues — STATUS: FIXED (2026-06-07)
+### 2a. Swing momentum (daily bars)
 
-**🔴→✅ `no_exit_at_loss` unbounded risk — FIXED with a hard catastrophic floor.**
-A **catastrophic stop** (`risk.limits.catastrophic_stop_pct`, default −8%) is now placed at entry, always rests at the broker, and is always honored even underwater. Crucially, **position sizing is now done off this floor** (`position_size(entry, catastrophic_stop(entry), …)`), so risk-per-trade is real (verified: 1% swing risk = exactly 1.00% of account), not fictional. `no_exit_at_loss` now only means "tolerate small dips between the floor and breakeven," not "hold to zero." Tail risk is bounded. *(Gap risk past the stop still exists — a stop is not a guaranteed fill — but loss is now bounded in normal conditions.)*
+1. **Entry-timing gate — `lib.indicators.entry_quality(df)`** (Stage-2 /
+   Weinstein–Minervini–O'Neil). Only `buyable=True` labels are actionable:
+   - `BUYABLE_PULLBACK` / `BUYABLE_BASE` → buy at `ideal_entry` (just above the
+     rising 20 SMA / pivot), never at market.
+   - `EXTENDED` / `MID_TREND` → watch-only, with the pullback level.
+   - `NOT_STAGE2` → drop.
+2. **Trend + momentum:** above the 200 SMA (`swing.trend_sma`), holding a
+   rising 8 EMA (`swing.entry_ema`). `entry_quality` already implies this.
+3. **Resistance breakout (strongest setup, optional):** `find_resistance`
+   returns the *nearest* level tested ≥ `swing.resistance.min_touches` within
+   `max_dist_pct`; `is_breakout` confirms. Requires **expanding volume** —
+   low-volume breakouts are skipped. `None` is a valid answer (price discovery).
 
-**🟠→✅ PDT rule — FIXED.** Market-open now checks `equity < pdt_min_equity_usd` ($25k) and `day_trades_remaining(ib)`; blocks/​warns on new day trades when restricted (`lib.ibkr.day_trades_remaining`).
+### 2b. Day trade (5-min bars, near-real-time feed)
 
-**🟠→✅ Delayed data for day trading — FIXED (guard/warn).** Market-open warns that day-trade signals are stale on delayed data and treats them as paper-only until a real-time feed is active. Swing on delayed remains fine.
+**Gate:** `lib.realtime.day_trade_conditions()` score (VIX + SPY/QQQ vs VWAP).
+Score < 5 → no day trades this session. Score ≥ `day.trend_day_score` (8) →
+trend day (see exits).
 
-**🟠→✅ Fixed take-profit vs. trailing conflict — FIXED.** Entries now use `prepare_entry` (entry + protective stop, **no fixed target**); the trailing stop governs the upside. `prepare_bracket` remains only for a deliberate partial scale-out.
+A candidate must pass all of:
 
-**🟡→✅ Swing breakout volume confirmation — FIXED.** Market-open now requires expanding volume on the breakout; low-volume breakouts are skipped.
+1. **Above session VWAP.**
+2. **Dollar volume:** `dollar_volume_ok(df)` 3-bar average ≥
+   `day.min_dollar_volume` (≥ `day.min_dollar_volume_midday` > 60 min after open).
+3. **Near the 8 EMA:** within `day.ema8_max_below_pct`; more than 5% below → skip.
+4. **R:R** ≥ `day.min_rr_open` in the first hour, ≥ `day.min_rr_midday` after.
+5. **No chasing:** price ≤ VWAP + `day.max_entry_above_vwap_atr` × ATR.
 
-### Remaining lower-priority items (tuning, not dangerous)
+**Ranking:** `lib.daytrade.scan()` scores 0–10 on RVOL (the #1 selector),
+daily ATR% (~2–8% sweet spot), above-VWAP, opening-range breakout, relative
+strength vs SPY and gap%. `annotate()` adds the news driver + pros/cons.
+RSI/MACD are deliberately excluded intraday (they lag). High RVOL with **no
+news** is a pump-risk veto, not a buy.
 
-**✅ Resistance detection fixed (2026-06-12).** `find_resistance` previously returned the globally most-touched pivot, which on a trending name was a stale level far below price — making breakout flags useless (journal 2026-06-08). It now returns the **nearest relevant** tested level (within `max_dist_pct`, default 12% of price), uses wing-window pivots deduped on plateaus, and returns `None` honestly when a name in price discovery has no horizontal 2-touch ceiling. Verified against real data (KO/TSM/JNJ get sensible levels; AMD/NVDA at highs correctly return None).
+**Scalp setups** (`lib.scalps.detect_all` on 1-min bars, at the open):
+`rubber_band`, `fashionably_late`, `hitchhiker`, `backside`, `second_chance`.
+Each returns mechanical entry/stop/targets/RR and has its own exit rule
+(see the exit-scan skill). Signals are candidates, never auto-orders.
 
-**✅ Volume floor upgraded to dollar volume.** The raw 70k share floor is replaced by a 3-bar average dollar volume check (≥ $5M/bar at open, ≥ $8M mid-day). Implemented in `lib.indicators.dollar_volume_ok()`.
+### 2c. Dip-reversion (daily bars) — the book's realized edge
 
-**🟡 Concentration / correlation.** 20% max single position and up to 5 swings with no sector limit means 5 correlated tech names = effectively one large bet. *Suggestion:* add a per-sector or correlation cap; 20% single-name is high.
+The momentum lenses structurally reject names that dropped hard (they are
+`NOT_STAGE2`), yet most realized winners were mean-reversion recoveries.
+`lib.screener.oversold_reversion()` screens Yahoo `day_losers` /
+`most_shorted` + holdings through `lib.indicators.reversion_quality()`:
 
-**🟡 No slippage/commission assumption.** Breakout fills and market exits slip. *Suggestion:* model a few cents of slippage + commissions in paper results so live performance isn't a surprise.
+- **`BUYABLE_DIP`** — *dropped* (≥ 2.5 ATR below the 20 SMA, or ≥ 12% off the
+  60-bar high) **and** *stabilizing* (RSI leaving ≤ 35, or a higher-low reversal
+  bar). Entry on the reversal bar, stop under the last-3-bar swing low, target
+  = nearest moving average ≥ 1.5R above (else 2R).
+- **`OVERSOLD_WAIT`** — dropped, not turned yet. Watch.
+- **`FALLING_KNIFE`** — close within 1% of the 20-day low. **Excluded.**
+- `knife_gate_200`: `False` (default) also allows recoveries from below the
+  200 SMA (higher beta); `True` restricts to dips inside an uptrend.
 
-**✅ Discovery degradation now visible (2026-06-12).** `lib.screener.yahoo_screen`/`discover` emit `[screener] WARN` to stderr when a Yahoo screen fails or all screens return empty — so a silent fallback to watchlist-only is caught. premarket-research surfaces it in the report ("⚠ market discovery unavailable — watchlist + holdings only") instead of implying a full-market scan.
+Primarily a swing setup; the same name can be day-traded on its intraday VWAP
+reclaim (the `backside` / `rubber_band` scalps).
 
-### Bottom line
-The skeleton is good and the discipline (journaling, review, approval, paper-first) is better than most retail setups. The critical risk-model flaw has been **fixed**: a hard catastrophic stop now caps per-position loss and sizing is done off it, so risk-per-trade is honest. PDT, delayed-data, fixed-target, and breakout-volume issues are also addressed. The remaining 🟡 items above (correlation cap, relative volume, slippage modeling) are tuning to refine during paper trading — not dangers.
+## 3. Entry price discipline (all lenses)
+
+- **Always a non-marketable limit at the pullback level — never at or above
+  the current price.** Day: VWAP + `day.entry_limit_vwap_buffer_atr` × ATR.
+  Swing: `entry_quality().ideal_entry`. Dip: the reversal-bar level.
+- Present day entries as a **zone**, and pre-build the order when the setup is
+  validated so approval transmits instantly.
+- A missed fill beats an overpaid one; never widen the limit to force a fill.
+
+## 4. Sizing & risk (`config/risk.yaml`)
+
+```
+shares = min( account × risk% ÷ |entry − stop| ,  account × max_position% ÷ entry )
+```
+
+Always via `lib.config.position_size(entry, stop, style)` — never by hand.
+
+| | Swing | Day |
+|---|---|---|
+| risk per trade | `swing_trading.risk_per_trade_pct` | `day_trading.risk_per_trade_pct` |
+| capital cap per name | `limits.max_position_pct` | `day_trading.max_position_pct` (overrides the global cap) |
+| max concurrent | `limits.max_concurrent_positions` | `day_trading.max_concurrent_positions` |
+
+- Size off the stop that is **actually honored** — normally the catastrophic
+  floor (§5), so risk-per-trade is real.
+- **Daily loss limit** `limits.daily_loss_limit_pct`: no new entries once hit.
+- **PDT:** below `limits.pdt_min_equity_usd` with 0 day trades remaining → no
+  new day trades.
+- The routines may also offer an **all-in size** (`min(AvailableFunds,
+  BuyingPower) ÷ entry`) beside the risk-capped one; the loss-if-stopped figure
+  must always be shown for both.
+
+## 5. Exits
+
+**Order shape.** Entries use `lib.ibkr.prepare_entry` = entry limit + attached
+catastrophic stop, **no fixed take-profit** — the trailing stop runs the winner.
+`prepare_bracket` / `prepare_scaled_bracket` are only for a deliberate target or
+scale-out (half at 1R, trail the rest).
+
+**Targets.** Come from the chart (resistance / level ladder / measured move),
+not analyst price targets. On a trend day (score ≥ `day.trend_day_score`) no
+fixed target at all. Analyst targets are context only, e.g. for a RAISE-TARGET
+suggestion.
+
+**Catastrophic stop** — `lib.config.catastrophic_stop(entry)` at
+−`limits.catastrophic_stop_pct`. Always computed, placed by default, and used
+for sizing. The user may decline it per trade; if so, build without it and
+state once that downside is then unbounded.
+
+**Trailing stops (up-only, never lowered):**
+- *Swing:* 2-bar ratchet on daily bars (`ratchet_2bar_stop`, lookback
+  `exits.trailing_lookback`, `include_current: false` = the 2 bars before the
+  new-high bar). Hard exit on a daily close below the 200 SMA.
+- *Day:* `day_trade_stop()` = max(2-bar ratchet on 5-min, VWAP −
+  `exits.day_vwap_buffer_atr` × ATR, current resting stop). Initial stop must
+  clear `noise_band(df, day.noise_band_atr_mult)`; never on a round number
+  inside the consolidation band.
+- Stop raises are applied automatically (de-risking).
+
+**`no_exit_at_loss`** (`exits.no_exit_at_loss`, user-mandated). Underwater
+positions are held — no trailing or safety exit below average cost, no resting
+stop below cost — except the catastrophic floor, which still fires.
+
+**In-profit auto-lock.** Once price > avg cost by ≥ 0.5×ATR
+(`should_profit_lock`), replace loose orders with an OCA pair: ratchet stop
+(never below cost, `profit_lock_stop`) + chart target (`chart_target`). Auto,
+no approval.
+
+**Day-trade specifics.** Flat by the close (MUST-CLOSE at T-15). On a trend
+day, a stopped-out name that reclaims VWAP within 60 min is flagged for
+re-entry (approval required).
+
+**Unfilled entry orders** are re-validated at the open and in each exit scan:
+cancel if invalidated or older than `orders.stale_entry_sessions`, re-adjust if
+drifted, flag gap-throughs, and sweep all of them on Friday
+(`orders.cancel_unfilled_before_weekend`). Always approval-only. Prior-session
+orders are cancelled with `connect(client_id=0)`.
+
+## 6. What needs approval
+
+| Action | Approval? |
+|---|---|
+| New entry, close a position, raise a target, cancel/move an entry | **Yes** |
+| Raise a stop, in-profit OCA lock, re-place a missing protective stop | No (de-risking only) |
+
+## 7. Open issues
+
+- **Gap risk:** a stop is not a guaranteed fill; overnight gaps can exceed the
+  catastrophic %.
+- **No correlation / sector cap:** five correlated tech names are effectively
+  one bet, and day trades may deploy up to `day_trading.max_position_pct`.
+- **No slippage / commission model** in paper results.
+- **Dip board skews small-cap / high-beta**, so judgment on liquidity and
+  catalyst still decides.
+
+---
+
+## Lessons log (why the rules look like this)
+
+| Date | Trade | Lesson → rule |
+|---|---|---|
+| 2026-06-07 | — | `no_exit_at_loss` was unbounded → catastrophic floor + size off it |
+| 2026-06-08/12 | various | `find_resistance` returned stale far-below levels → nearest-level search |
+| 2026-06-11 | premarket run | Every candidate showed qty=0 → always verify shares > 0 before presenting |
+| 2026-06-12 | AMD | VWAP-trail exited at a flush bottom → 2-bar ratchet primary, VWAP floor widened 0.5→1.5 ATR; no fixed target on trend days; re-entry on VWAP reclaim |
+| 2026-06-12 | AMD $512 stop | Round number inside the range was shaken out → noise-band + no round numbers |
+| 2026-06-12 | CRWV | Valid entry lost to latency → pre-build orders at validation; entry as a zone |
+| 2026-06-12 | IBKR | $91 limit filled, ran to $93.10 → RAISE-TARGET proximity flag |
+| 2026-06-12 | TSM/MRVL/CRWD | Stale correlated entries filled together → unfilled-order re-validation + Friday sweep |
+| 2026-06-12 | Gateway | Single empty `openTrades()` read looked like "unprotected" → always use `open_orders()` |
+| 2026-06-15 | AMD | Marketable limit $5 above VWAP faded → non-marketable limit, `max_entry_above_vwap_atr` |
+| 2026-06-22/24 | COIN/SMCI/PTCT | Bought extended / non-Stage-2 names → `entry_quality` gate |
+| 2026-07-20 | BABA | Lock on a tiny gain put the stop 1¢ under market → 0.5×ATR lock threshold |
+| 2026-10-20 | book review | Winners were mean-reversion (CCL, COIN, NBIS, BABA, OKTA, RDDT/UBER) → dip-reversion lens |

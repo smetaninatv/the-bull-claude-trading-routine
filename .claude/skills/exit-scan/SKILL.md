@@ -15,7 +15,7 @@ The real downside protection is the **stop order resting at IBKR**, which fires 
 
 | Situation | Run every | Why |
 |-----------|-----------|-----|
-| **Day trade — active runner on a trend day** | **5 min** | Matches the 5-min bar close (can't ratchet faster than bars print); catches a silently-cancelled stop fast; keeps prompt cache warm (5-min TTL) |
+| **Day trade — active runner on a trend day** | **5 min** | Matches the 5-min bar close (can't ratchet faster than bars print); catches a silently-cancelled stop fast |
 | **Day trade — consolidating / flat** | 10–15 min | Resting stop protects; nothing actionable between bars |
 | **Day trade — last 30 min to close** | 5 min + a hard check at T-15 | Enforce the MUST-CLOSE rule; no overnight day trades |
 | **Swing positions (daily bars)** | hourly (the scheduled cadence) | Daily-bar ratchet only changes once per day; hourly is ample |
@@ -32,7 +32,7 @@ Scanning a day trade *faster* than ~5 min buys nothing — the 2-bar ratchet lev
 
 Recompute deterministically each scan with `lib.indicators.ratchet_2bar_stop(df, lookback, include_current)` — pass bars from a short lead-in before entry through now, so the full ratchet path replays without stored state. Timeframe by style (`strategy.exits`): **swing → daily**, **day → 5-min**. Lookback = `exits.trailing_lookback` (default 2). (Strategy is long-only; a short would mirror the ratchet with highs.)
 
-> **Window ambiguity to confirm with the user:** "lowest low of the past 2 bars" can mean the 2 bars *before* the new-high bar (`include_current=False`, default) or the 2 most recent bars *including* it (`include_current=True`, tighter). Default is the former, for consistency with the new-high trigger's "past 2 bars".
+`exits.include_current: false` (set): the 2-bar low is taken from the 2 bars *before* the new-high bar.
 
 ## Do NOT exit at a loss (hold underwater positions)
 

@@ -49,8 +49,7 @@ exits:
   # (AMD 2026-06-12: VWAP-trail alone exited at the bottom of a flush that reversed.)
   day_vwap_buffer_atr: 1.5     # VWAP floor = VWAP − this × ATR (was 0.5, too tight)
   day_post_stop_reentry: true  # on a trend day, scan for VWAP-reclaim re-entry after a stop
-  # HOLD underwater positions — never realize a loss; only exit at breakeven+.
-  # WARNING: this removes downside protection. A held position can keep falling;
-  # the trailing stop then only protects GAINS, not losses. Set false to restore
-  # normal stop-loss behavior.
+  # HOLD underwater positions — no trailing/safety exit below avg cost.
+  # The catastrophic floor (risk.limits.catastrophic_stop_pct) still fires, so
+  # loss is bounded only if that stop is placed. Set false for normal stops.
   no_exit_at_loss: true

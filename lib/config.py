@@ -73,7 +73,7 @@ def position_size(entry, stop, style="swing", risk=None):
         `limits.max_position_pct`%.
     So a tight stop hits the capital cap (deploys near max_position_pct); a wide
     stop trims the position to hold the risk cap. Day trades carry their own
-    higher caps (risk 1.3% / position 43%); swings use 1% risk + the global 20% cap.
+    own caps (`day_trading.*` in risk.yaml); swings use their risk % + the global cap.
 
     IMPORTANT: pass the stop that will actually be HONORED. With no_exit_at_loss
     on, the only enforced downside stop is the catastrophic floor, so size off

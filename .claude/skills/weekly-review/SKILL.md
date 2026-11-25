@@ -1,6 +1,6 @@
 ---
 name: weekly-review
-description: Weekly review (~22:15 CET Friday / after US close). Aggregates the week's performance, rule hit-rate, best/worst trades, and process observations, then proposes concrete adjustments to the watchlist, rules, or risk settings for next week.
+description: Weekly review (~22:15 CET Friday / after US close). Aggregates the week's performance, rule hit-rate, best/worst trades, and process observations, then proposes concrete adjustments to pins, rules, or risk settings for next week.
 ---
 
 # Weekly review routine
@@ -14,7 +14,7 @@ Goal: turn a week of journal entries into lessons and concrete tweaks.
 3. **Rule performance.** Which shortlist rules produced winners vs. losers? Where did discretionary overrides help or hurt? Did risk limits ever bind?
 4. **Best & worst trades** with charts — what was right/wrong about each, in hindsight.
 5. **Propose adjustments** (do NOT auto-apply — recommend and let the user edit):
-   - `config/watchlist.txt`: names to add/drop.
+   - `config/watchlist.txt`: optional pins to add/drop (the universe is otherwise dynamic).
    - shortlist rules: thresholds to tighten/loosen.
    - `config/risk.yaml`: sizing or limit changes if warranted.
 6. **Write the review** to the journal and **report** it with charts and a short "focus for next week" list.
