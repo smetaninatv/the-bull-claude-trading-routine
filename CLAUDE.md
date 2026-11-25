@@ -21,9 +21,13 @@ copying numbers.
   `lib.ibkr.transmit(...)` only after the user approves each one. The only
   automatic actions are de-risking ones: raising a stop, the in-profit OCA
   lock, and re-placing a missing protective stop.
-- **Paper first:** `lib.ibkr.connect()` defaults to `require_paper=True` and
-  refuses a live login (paper = `DU…`, live = `U…`). The port does not decide
-  paper vs live. Gateway API port here is `4001` (`lib.ibkr.DEFAULT_PORT`).
+- **Paper or live** is decided by the Gateway login (paper = `DU…`, live =
+  `U…`), not the port. `connect()` accepts live only when
+  `account.allow_live: true` in `config/risk.yaml` (enabled by the user
+  2026-11-25). On a live account, every approval ask must start with
+  **LIVE — real money** (`lib.ibkr.account_mode(ib)`). Never flip
+  `allow_live` yourself. Gateway API port here is `4001`
+  (`lib.ibkr.DEFAULT_PORT`).
 - **Sizing** always goes through `lib.config.position_size(...)`, sized off the
   stop that will actually be honored (normally the catastrophic floor).
 - **Entries** are non-marketable limits at a pullback level — never at or above

@@ -4,6 +4,7 @@ HUMAN-IN-THE-LOOP: orders are built with transmit=False. Nothing is sent to
 IBKR until `transmit()` is called after the user approves.
 """
 import math
+import sys
 import time
 
 from ib_async import IB, LimitOrder, Stock, StopOrder
@@ -11,6 +12,7 @@ from ib_async import IB, LimitOrder, Stock, StopOrder
 HOST = "127.0.0.1"
 # This machine's Gateway API socket listens on 4001. Note: the port does NOT
 # decide paper vs live — the login does. Paper accounts are DU..., live are U....
+# Live is accepted only with `account.allow_live: true` in config/risk.yaml.
 DEFAULT_PORT = 4001
 CLIENT_ID = 17
 
@@ -22,30 +24,97 @@ CLIENT_ID = 17
 OUTSIDE_RTH = True
 
 
-def connect(host=HOST, port=DEFAULT_PORT, client_id=CLIENT_ID, readonly=False,
-            require_paper=True):
-    """Connect to IB Gateway/TWS.
+def _live_allowed():
+    """`account.allow_live` from config/risk.yaml (default False = paper only)."""
+    from lib.config import load_risk
+    return bool(load_risk().get("account", {}).get("allow_live", False))
 
-    SAFETY: by default this refuses to stay connected to a live (U...) account.
-    Pass require_paper=False only when you deliberately intend live trading.
+
+def live_accounts(ib):
+    """Managed accounts that are LIVE (real money). Paper accounts start 'DU'."""
+    return [a for a in ib.managedAccounts() if not a.startswith("DU")]
+
+
+def is_live(ib):
+    """True if this connection is to a live (real-money) account."""
+    return bool(live_accounts(ib))
+
+
+def account_mode(ib):
+    """'LIVE' or 'PAPER' — use in every approval ask so the stakes are explicit."""
+    return "LIVE" if is_live(ib) else "PAPER"
+
+
+def connect(host=HOST, port=DEFAULT_PORT, client_id=CLIENT_ID, readonly=False,
+            require_paper=None):
+    """Connect to IB Gateway/TWS (paper or live — the Gateway login decides).
+
+    SAFETY: live (U...) accounts are accepted only when `account.allow_live:
+    true` in config/risk.yaml. `require_paper=True/False` overrides the config
+    for this call. Every connection prints a PAPER / LIVE banner to stderr.
     """
+    if require_paper is None:
+        require_paper = not _live_allowed()
     ib = IB()
     ib.connect(host, port, clientId=client_id, readonly=readonly)
-    if require_paper:
-        live = [a for a in ib.managedAccounts() if not a.startswith("DU")]
-        if live:
-            ib.disconnect()
-            raise RuntimeError(
-                f"Refusing to proceed: connected to non-paper account(s) {live}. "
-                "Log IB Gateway into the PAPER account (DU...), or call "
-                "connect(require_paper=False) to override deliberately."
-            )
+    live = live_accounts(ib)
+    if live and require_paper:
+        ib.disconnect()
+        raise RuntimeError(
+            f"Refusing to proceed: connected to LIVE account(s) {live} but live "
+            "trading is disabled. Log IB Gateway into the PAPER account (DU...), "
+            "or set `account.allow_live: true` in config/risk.yaml."
+        )
+    if live:
+        print(f"[ibkr] *** LIVE ACCOUNT {', '.join(live)} — REAL MONEY ***",
+              file=sys.stderr)
+    else:
+        print(f"[ibkr] paper account {', '.join(ib.managedAccounts())}",
+              file=sys.stderr)
     return ib
 
 
-def account_value(ib, tag="NetLiquidation"):
+def _usd_per_base(ib, base):
+    """USD per 1 unit of the account's base currency (e.g. EURUSD ≈ 1.16).
+
+    IBKR's `ExchangeRate` tag gives base-per-unit of each currency, so for
+    currency 'USD' it is base-per-USD → invert. Falls back to Yahoo FX.
+    """
     for v in ib.accountValues():
-        if v.tag == tag and v.currency in ("USD", "BASE"):
+        if v.tag == "ExchangeRate" and v.currency == "USD":
+            try:
+                r = float(v.value)
+                if r > 0:
+                    return 1.0 / r
+            except ValueError:
+                pass
+    try:
+        import yfinance as yf
+        px = yf.Ticker(f"{base}USD=X").history(period="5d")["Close"]
+        if len(px):
+            return float(px.iloc[-1])
+    except Exception:
+        pass
+    return None
+
+
+def account_value(ib, tag="NetLiquidation"):
+    """Account value for `tag`, in **USD** (prices are USD).
+
+    Live accounts may have a non-USD base currency (this one is EUR): when no
+    USD figure is reported, the base-currency value is converted to USD.
+    Returns None if the value (or the FX rate) is unavailable.
+    """
+    vals = [v for v in ib.accountValues() if v.tag == tag]
+    for v in vals:
+        if v.currency == "USD":
+            return float(v.value)
+    for v in vals:
+        if v.currency not in ("BASE", "") and v.currency.isalpha() and len(v.currency) == 3:
+            rate = _usd_per_base(ib, v.currency)
+            return float(v.value) * rate if rate else None
+    for v in vals:
+        if v.currency == "BASE":
             return float(v.value)
     return None
 
@@ -323,4 +392,6 @@ def transmit(ib, contract, bracket):
     for o in bracket:
         o.outsideRth = OUTSIDE_RTH
     bracket[-1].transmit = True
+    print(f"[ibkr] transmitting {len(bracket)} order(s) for {contract.symbol} "
+          f"to {account_mode(ib)} account", file=sys.stderr)
     return [ib.placeOrder(contract, o) for o in bracket]

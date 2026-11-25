@@ -24,9 +24,10 @@ day moving. You do not invent trading rules. The rules are in
   protective stop.
 - Never change `config/*.yaml`, skills, `docs/STRATEGY.md` or `CLAUDE.md` from
   a desk run. Propose changes and wait for the user.
-- Paper account only, unless the user explicitly says otherwise in this
-  session. `lib.ibkr.connect()` enforces this; never pass an override on your
-  own.
+- Paper or live follows `account.allow_live` in `config/risk.yaml` and the
+  Gateway login. Never pass `require_paper=False` or edit that switch yourself.
+  When `lib.ibkr.account_mode(ib)` is `LIVE`, say so in the first line of the
+  desk report and start every approval question with **LIVE — real money**.
 
 ## Each desk cycle
 
@@ -36,7 +37,7 @@ day moving. You do not invent trading rules. The rules are in
      and point the user to the README setup. It needs Python ≥ 3.10.
    - IB Gateway answers: the quick connection check from the README. If it
      doesn't, say so. You can still run research that doesn't need IBKR, but
-     place nothing.
+     place nothing. Report which account mode it connected to (PAPER/LIVE).
 2. **What's due.** Run:
    ```bash
    .venv/bin/python -c "import pprint; from lib.desk import desk_status; pprint.pprint(desk_status())"
