@@ -1,72 +1,89 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-**trading-routine** is a set of *Claude Routines* for day/swing trading US equities through **Interactive Brokers**. Each routine is a Claude Code skill that runs Python tools (via `ib_async`) to research, generate annotated charts with reasoning, and prepare orders. The system is **human-in-the-loop**: Claude prepares ready-to-send orders but transmits nothing until the user explicitly approves.
+**trading-routine** is a set of Claude Code skills for day/swing trading US
+equities through **Interactive Brokers** (`ib_async`). Each skill runs the
+Python tools in `lib/` to research, chart and prepare orders. **Human-in-the-loop:**
+Claude prepares orders; nothing that opens, closes or re-prices a trade is sent
+without the user's explicit OK.
 
-## Strategy
+**All trading rules live in [`docs/STRATEGY.md`](docs/STRATEGY.md)** — read it
+before changing trading logic. Thresholds live in `config/risk.yaml` and
+`config/strategy.yaml`; docs and skills cite the config keys rather than
+copying numbers.
 
-The full strategy (entries, sizing, exits) and a critical assessment live in **`docs/STRATEGY.md`** — read it before changing trading logic. Known open risk flagged there: `no_exit_at_loss` removes downside protection (user-mandated; documented with the trade-off).
+## Invariants (do not change without asking the user)
 
-## Core design decisions (do not change without asking the user)
+- **Approval:** orders are built with `transmit=False` and sent via
+  `lib.ibkr.transmit(...)` only after the user approves each one. The only
+  automatic actions are de-risking ones: raising a stop, the in-profit OCA
+  lock, and re-placing a missing protective stop.
+- **Paper first:** `lib.ibkr.connect()` defaults to `require_paper=True` and
+  refuses a live login (paper = `DU…`, live = `U…`). The port does not decide
+  paper vs live. Gateway API port here is `4001` (`lib.ibkr.DEFAULT_PORT`).
+- **Sizing** always goes through `lib.config.position_size(...)`, sized off the
+  stop that will actually be honored (normally the catastrophic floor).
+- **Entries** are non-marketable limits at a pullback level — never at or above
+  market. Use `prepare_entry()` (entry + catastrophic stop, no fixed target)
+  by default.
+- **Catastrophic stop** (user-mandated 2026-06-10): always compute and offer it;
+  the user may decline per trade — then build without it and note the open
+  downside once.
+- **`no_exit_at_loss`** (user-mandated): never propose a loss-realizing exit
+  above the catastrophic floor. See STRATEGY §5.
+- **Universe** is fully dynamic (`lib.screener.dynamic_universe()` + holdings);
+  no hardcoded watchlist. `config/watchlist.txt` is an optional pin list.
+- **Decision style:** rules build the shortlist and enforce limits; Claude adds
+  judgment (news, catalyst, chart read) before recommending.
+- **Runtime:** user's laptop, not always on → skills are triggered manually.
+  Don't assume a run happened on schedule.
+- **Time:** US equities, 9:30–16:00 ET. User is in **CET**. Anchor schedule
+  logic to US/Eastern and convert dynamically (US and EU DST differ).
 
-- **Autonomy:** Suggest + approve. Orders are built with `transmit=False`; they are sent only after the user OKs each one. Never auto-transmit.
-- **Broker:** IB Gateway + `ib_async`, **paper account first** (free, delayed data). This machine's Gateway API socket is on port `4001` (`lib.ibkr.DEFAULT_PORT`). The port does **not** determine paper vs live — the login does (paper = `DU…`, live = `U…`). `connect()` defaults to `require_paper=True` and refuses a live account unless explicitly overridden.
-- **Decision style:** Hybrid — rules build the candidate shortlist and enforce risk limits; Claude adds judgment (news, context, chart read) before recommending.
-- **Universe:** fully dynamic — discovered live every run via `lib.screener.dynamic_universe()` (full-market relative-volume scan + Yahoo screens + pre-market movers), unioned with current IBKR holdings. There is **no hardcoded watchlist**; `config/watchlist.txt` is an optional user pin list, empty by default (2026-08-10).
-- **Risk:** fixed % risk per trade, sized off stop distance; see `config/risk.yaml`. Sizing: `shares = (account × risk%) ÷ |entry − stop|`, capped by `max_position_pct`.
-- **Entry:** always use a limit order at the lowest realistic price — ATR-based pullback (0.5–1 ATR below close), 8 EMA pullback, or recent session low. Never enter at or above current market price.
-- **Target:** always set a limit sell at the highest credible predicted price (highest plausible analyst target or key resistance). Use `prepare_bracket()`, not `prepare_entry()`.
-- **Catastrophic stop:** optional (user-mandated, 2026-06-10). Always compute and offer it, but do not force it. Present as "include? yes/no" and build without it if user declines. Note open downside once when declining.
-- **Runtime:** user's laptop, **not always on** → routines are **assisted/manual trigger** (user runs the skill when present), not unattended cron. Don't assume a job fired on time.
-- **Market & timezone:** US equities (NYSE/Nasdaq, 9:30–16:00 ET). User is in **CET**. Anchor all schedule logic to US/Eastern and convert dynamically (US and EU DST shift on different dates).
-- **Output:** annotated charts + written rationale saved per run under `output/charts/<date>/`, plus a running trade journal (`output/journal.md` / `.db`). No live-streaming UI — charts are snapshots taken at decision time.
-
-## Schedule (local CET ≈ derived from US/Eastern)
+## Schedule
 
 | Routine | Skill | US Eastern | CET (approx) |
 |---|---|---|---|
 | Pre-market research | `/premarket-research` | 7:30 | ~13:30 |
-| Market-open execution | `/market-open` | 9:30 (first 30m) | ~15:30 |
-| Hourly exit scan | `/exit-scan` | 10:30–16:00 | ~16:30–22:00 |
+| Market-open execution | `/market-open` | 9:30 (+30 min) | ~15:30 |
+| Exit scan | `/exit-scan` | 9:30–16:00 — day trades every 5–15 min, swings hourly | ~15:30–22:00 |
 | Daily summary | `/daily-summary` | after close | ~22:15 |
-| Weekly review (Fri) | `/weekly-review` | after close | ~22:15 Fri |
+| Weekly review | `/weekly-review` | Fri after close | ~22:15 Fri |
 
 ## Architecture
 
-- `lib/` — Python tools the skills call (importable package):
-  - `ibkr.py` — connect, account value, positions, build bracket orders (un-transmitted), transmit after approval.
-  - `data.py` — historical/intraday bars, watchlist loading, IBKR scanner screening.
-  - `screener.py` — Yahoo Finance (`yfinance`) candidate discovery (gainers/most-active/growth-tech screens) + historical-data fallback. Primary discovery source since the IBKR scanner times out on this Gateway. Bars match `data.py` format; IBKR stays source of truth for positions/orders. `oversold_reversion()` (2026-10-20) is the mean-reversion discovery: it screens the LOSERS (`day_losers`/`most_shorted` + holdings) through `indicators.reversion_quality` to surface beaten-down names that are turning back up — the dip-buy board, complementing the momentum-oriented `discover()`/`dynamic_universe()`.
-  - `realtime.py` — near-real-time intraday data for day trading: `get_intraday_bars(sym, "5m")` (Webull if configured, else yfinance), `day_trade_conditions()` (VIX + SPY/QQQ VWAP → score 0–10 + verdict), `premarket_movers()` (Webull/yfinance gappers), `market_session()`, `minutes_to_close()`. Optional Webull integration via `config/webull_creds.json` (see requirements.txt). Replaces the 15-min delayed IBKR feed for all day-trade signal work.
-  - `indicators.py` — EMA(8)/SMAs/RSI/MACD/ATR/session-VWAP in plain pandas (no pandas-ta — numba lacks Py 3.14 support), plus `find_resistance`/`is_breakout` for the swing breakout rule, `level_ladder`/`inflexion_bias` (game-plan-style S/R ladder + bias, 2026-08-05), `entry_quality` (Stage-2 momentum pullback gate — buys strength), and its mean-reversion complement `reversion_quality` (2026-10-20 — scores a beaten-down name BUYABLE_DIP / OVERSOLD_WAIT / FALLING_KNIFE: dropped + stabilizing turn = buy, still-making-fresh-lows = knife, excluded; `knife_gate_200` toggles the strict above-200 quality gate).
-  - `scalps.py` — the five scalping-setup detectors (`rubber_band`, `fashionably_late`, `hitchhiker`, `backside`, `second_chance`) on 1-min bars; each returns mechanical entry/stop/target(s)/RR or None. `detect_all()` runs them all. Wired into premarket (watch), market-open (detect+place), exit-scan (setup-specific exits). Added 2026-08-10 from the scalping cheat sheets; still human-in-the-loop.
-  - `charts.py` — annotated candlestick PNGs (indicator overlays + entry/exit markers) via `mplfinance`.
-  - `journal.py` — append rationale to the markdown journal and log trades to SQLite.
-  - `config.py` — load `watchlist.txt` and `risk.yaml`; position-sizing helper.
-- `config/` — user-editable `watchlist.txt` and `risk.yaml`.
-- `.claude/skills/<routine>/SKILL.md` — the five routines.
-- `output/` — generated charts and journal (git-ignored).
-
-## Setup / running
-
-```powershell
-python -m venv .venv ; .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-Then launch **IB Gateway** logged into the **paper** account with the API enabled (Configure → Settings → API → Enable ActiveX and Socket Clients; port 4002; trust 127.0.0.1). Run a routine by invoking its skill (e.g. `/premarket-research`).
-
-Quick connection check:
-```powershell
-python -c "from lib.ibkr import connect; ib=connect(); print(ib.accountSummary()[:3]); ib.disconnect()"
-```
+- `lib/ibkr.py` — connect, account values, positions/portfolio, `open_orders`
+  (use this, not raw `openTrades()`), order builders (`prepare_entry`,
+  `prepare_bracket`, `prepare_scaled_bracket`, `ratchet_lock_oca`), `transmit`.
+- `lib/data.py` — IBKR historical/intraday bars (15-min delayed), IBKR scanner.
+- `lib/realtime.py` — near-real-time intraday bars (Webull if
+  `config/webull_creds.json`, else yfinance), `day_trade_conditions`,
+  `premarket_movers`, `market_session`, `market_closed_reason`,
+  `minutes_to_close`. Use this, not `data.py`, for day-trade signals.
+- `lib/screener.py` — Yahoo/TradingView-style discovery: `market_scan`,
+  `discover`, `dynamic_universe`, `oversold_reversion`, bar fallback.
+- `lib/daytrade.py` — day-trade ranking (`scan`, `annotate`, `latest_headline`).
+- `lib/indicators.py` — plain-pandas indicators (no pandas-ta: numba lacks
+  Py 3.14), resistance/breakout, `level_ladder`, `entry_quality`,
+  `reversion_quality`, stops (`ratchet_2bar_stop`, `day_trade_stop`,
+  `noise_band`, `chart_target`).
+- `lib/scalps.py` — the five 1-min scalp detectors + `detect_all`.
+- `lib/sentiment.py` — `social_snapshot` (WSB / StockTwits / news VADER);
+  context only, never a trigger.
+- `lib/charts.py` — annotated `mplfinance` PNGs.
+- `lib/journal.py` — markdown journal, SQLite trade log, monthly perf tracker.
+- `lib/config.py` — load YAML/watchlist, `catastrophic_stop`, `position_size`.
+- `.claude/skills/<routine>/SKILL.md` — the five routines (procedure only).
+- `output/` — charts per run (`output/charts/<date>/`), `journal.md`/`.db`
+  (git-ignored).
 
 ## Conventions
 
-- All order construction defaults to `transmit=False`. Approval → call `ibkr.transmit(...)`.
-- Every buy/sell recommendation must produce: a saved chart, the rule trigger that shortlisted it, and Claude's written reasoning, all recorded in the journal.
-- Sizing always goes through `config.position_size(...)` so risk limits and the position cap are enforced in one place.
-- `ib_async` calls are synchronous-style (the library runs its own event loop); follow the existing pattern in `lib/` rather than mixing in raw asyncio.
+- Every recommendation produces a saved chart, the rule that shortlisted it,
+  and written reasoning, all recorded in the journal.
+- `ib_async` is synchronous-style (it runs its own loop); follow the existing
+  patterns in `lib/`, don't mix in raw asyncio.
+- Setup and connection check: see [README](README.md#setup).

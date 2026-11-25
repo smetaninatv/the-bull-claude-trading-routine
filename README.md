@@ -1,206 +1,104 @@
 # trading-routine
 
-Claude Routines for **day/swing trading US equities through Interactive Brokers**.
+Claude Code routines for **day/swing trading US equities through Interactive Brokers**.
 
-Scheduled routines (run as Claude Code skills) research the market, generate
-annotated charts with reasoning, and prepare orders. **Human-in-the-loop**: Claude
-proposes orders; nothing is sent to IBKR until you approve. The one exception is
-*raising* a protective stop — that only de-risks, so the exit scan does it
-automatically.
+The routines research the market, generate annotated charts with written
+reasoning, and prepare orders. **Human-in-the-loop:** Claude proposes orders and
+nothing that opens or closes a trade is sent to IBKR until you approve it. The
+only automatic actions are ones that reduce risk (raising a stop, locking in a
+gain).
 
 <img width="1916" height="1108" alt="image" src="https://github.com/user-attachments/assets/83070c33-2496-4068-94e6-efac82771d52" />
 
----
+## How it trades (short version)
 
-## Two styles: swing vs. intraday
+Three ways to find a long:
 
-| | **Swing** | **Intraday (day trade)** |
-|---|---|---|
-| **Hold time** | Days to ~2 weeks | Minutes to hours — **always flat by the close** |
-| **Chart** | Daily bars | 5-minute bars |
-| **What it rides** | A multi-day trend | A single day's momentum |
-| **Trend filter** | 200-day moving average | The day's VWAP (volume-weighted average price) |
-| **Data** | 15-min delayed is fine | Near-real-time (~1 min) |
+- **Swing momentum** — a Stage-2 uptrend bought on a pullback, never extended.
+- **Day trade** — above VWAP, liquid, high relative volume, real catalyst; only
+  on days the market tape scores ≥ 5/10. Plus five auto-detected scalp setups.
+- **Dip-reversion** — a quality name that dropped hard and has started to turn
+  up (never a falling knife).
 
-Both look for the same thing — *price moving up with the trend behind it* — just on different clocks.
+Every trade risks a fixed slice of the account, enters on a limit at a pullback
+level (never chasing), carries a catastrophic stop, and is then managed by a
+ratcheting trailing stop that only moves up.
 
----
+**Full rules, numbers and rationale: [`docs/STRATEGY.md`](docs/STRATEGY.md).**
 
-## Swing entries (daily chart)
-
-A name has to pass all of these to be a swing candidate. The "why" matters:
-
-- **Above the 200-day moving average** — this is the macro trend filter. Above it = uptrend, longs allowed. Below it = downtrend, skip (don't catch falling knives).
-- **Holding a rising 8-day EMA** — the short-term momentum line. We enter when price is riding above a rising 8 EMA, *or* pulling back to it and bouncing. That pullback is the low-risk entry.
-- **Resistance breakout (optional, strongest setup)** — a price ceiling that's been tested ≥ 2 times, then broken **on rising volume**. A breakout on weak volume usually fails, so those are skipped. (The tool that finds these returns the *nearest relevant* ceiling, so it won't flag a stale level from months ago.)
-
-**Goal:** surface 1–2 genuinely high-conviction swing setups each session — actively hunt clean pre-breakout names, don't just trade whatever gapped up that morning.
-
----
-
-## Intraday entries (5-minute chart)
-
-Day trades only happen on days the market itself is cooperative. Each morning a
-"day-trade conditions" score (0–10, from the VIX and whether SPY/QQQ are above
-their VWAP) gates everything:
-
-- **Score < 5 → no day trades that day.** Choppy or fearful tape; sit out.
-- **Score ≥ 5 → hunt for a setup.**
-
-A qualifying intraday long must be:
-
-- **Above the session VWAP** — the day's fair-value line; above it = buyers in control.
-- **Liquid enough** — average dollar-volume ≥ $5M per 5-min bar ($8M mid-day). (Dollar volume, not share count, because 70k shares means something totally different for a $12 stock vs. a $500 stock.)
-- **Near its 8 EMA** — within ~2%; we want momentum, not something extended far above or collapsing below.
-- **Worth the risk** — reward-to-risk ≥ 2:1 at the open, ≥ 3:1 mid-day (the thinner mid-day tape needs a bigger edge).
-
-The entry is given as a **price zone** (a pullback to VWAP / 8 EMA / recent low), never at or above the current price — and the order is **pre-built the moment the setup is validated**, so when you approve it fires instantly instead of chasing a price that moved in the meantime.
-
-**Goal:** take one quality day trade *every session the tape allows* — but **quality only, never forced.** No solid, low-risk candidate = **no trade that day.** A flat day is a correct outcome, not a failure.
-
----
-
-## Intraday scalping setups (auto-detected)
-
-On top of the "above-VWAP, near-8-EMA, R:R ≥ 2" day-trade gate, the routines
-auto-detect five specific intraday scalp patterns (`lib.scalps`) on 1-minute bars
-each open. A match becomes a **sized, approval-ready candidate** with a defined
-entry/stop/target — it's never auto-fired, and on exit each is managed by its
-*own* rule.
-
-- **Rubber Band** *(fade the flush)* — after a stock stretches far from VWAP on accelerating, sloppy selling, buy the first green candle that snaps back through the prior 2 highs. Stop .02 below the day's low; scale out in thirds at 1R, 2R, and into VWAP. Best with RVOL > 5 and a 3+ ATR extension. *Don't fade a cleanly trending market.*
-- **Fashionably Late** *(momentum turn)* — when a rising 9-EMA crosses up through a flat/falling VWAP after a bottom, enter the cross. Stop a third of the way back toward the low; target one measured move (low→cross) above the cross. ~3:1.
-- **HitchHiker** *(ride the buy program)* — after an opening drive that *holds* and coils in the top third of the day's range (5–20 min), buy the break of the coil on rising volume. Stop .02 below the coil low; exit in two waves.
-- **Back$ide** *(squeeze back to VWAP)* — a stock stretched *below* VWAP that starts printing higher highs + higher lows above a rising 9-EMA: buy the range break, target VWAP as trapped shorts cover. Stop below the last higher-low; one-and-done.
-- **Second Chance** *(breakout retest)* — after price breaks a level and pulls back to retest it as new support, buy the confirmation candle. Stop .02 below the retest low; take half at the pullback high and trail the rest under the 9-EMA.
-
-Candidates come from a **fully dynamic universe** — discovered live every run from the whole market (relative-volume scan + Yahoo screens + pre-market movers) plus your holdings; there's no fixed watchlist. Levels for targets/stops come from a **game-plan-style S/R ladder** (`lib.indicators.level_ladder`), and any position that crosses into profit is **auto-locked** with a ratchet stop + chart target.
-
----
-
-## Dip-reversion — buying the drop that's about to bounce
-
-The swing and intraday rules above hunt *momentum* — names going **up** with the trend behind them. But a lot of real winners come the other way: a quality name that **dropped hard, then reverts up**. The breakout rules structurally reject those (a big drop is, by definition, not a Stage-2 uptrend), so a separate selector finds them (`lib.indicators.reversion_quality` + `lib.screener.oversold_reversion`).
-
-It screens the **losers** (Yahoo `day_losers` / `most_shorted` + your own underwater holds) and labels each:
-
-- **`BUYABLE_DIP`** — dropped meaningfully (ATRs below its 20-day average, or well off its recent high) **and the decline is stabilizing** (RSI turning up out of oversold, or a higher-low reversal bar). Entry on the reversal bar, stop just under the swing low, **target = the mean it fell from** (the 20/50/200-day average above it). A defined reversion target — pairs naturally with a take-profit-only order.
-- **`OVERSOLD_WAIT`** — beaten down but the turn hasn't started yet. Watch, don't buy.
-- **`FALLING_KNIFE`** — *still carving fresh lows.* **Excluded.** The single most important job here is not catching these.
-
-The one real knob is **quality**: `knife_gate_200`. Strict (`True`) only takes dips that are *still above* their 200-day average — a pullback inside a long uptrend. Relaxed (`False`, the default) also allows recoveries from *below* the 200 — higher-beta, but historically where a lot of the recovery winners came from. Either way the board is **candidates, not blind buys** — it leans toward small, volatile names, so judgment (liquidity, a real catalyst) still decides.
-
-This board is printed **alongside** the momentum boards every pre-market and market-open run; a name can be a legitimate long from either.
-
----
-
-## Position sizing (how many shares)
-
-Always the same formula, so every trade risks the same small slice of the account:
-
-```
-shares = (account × risk%) ÷ (entry − catastrophic stop)
-```
-
-- **risk%** = 0.5% for day trades, 1.0% for swings.
-- The stop in that formula is the **catastrophic stop** (−8% hard floor) — the loss that's *actually* enforced — so the risk-per-trade is real, not fictional.
-- **Caps:** no single position > 20% of the account; max 3 day / 5 swing positions at once; if the account is down 3% on the day, stop opening anything new.
-
----
-
-## Exits — cap the loss, let the winner run
-
-- **Catastrophic stop (−8%)** — placed at entry, **always rests at the broker**, never removed. The hard floor beneath everything. It's also what sizing is measured from.
-- **Trailing stop (runs the winner):**
-  - *Swing:* a **2-bar trailing stop on daily bars** — it ratchets **up** as the trade makes new highs and never moves down; the trade exits when price finally drops below it. Plus a hard exit if the daily close breaks back below the 200-day average.
-  - *Intraday:* the **2-bar ratchet is primary**, with a **VWAP-based floor** beneath it (`VWAP − 1.5×ATR`). On a strong trend day there's **no fixed profit target** — the trailing stop decides when the move is done, so a runaway winner isn't capped. If a stop gets shaken out on a trend day but price reclaims VWAP within an hour, a **re-entry is flagged** (the trend's still intact).
-- **`no_exit_at_loss` (your rule):** don't bail on small dips while underwater — hold and wait for recovery — but this is **bounded by the −8% floor**, so a position can never lose more than the catastrophic amount. (Exception you've used deliberately: cut a deep, going-nowhere loser to free cash for a clearly better setup.)
-- **Raising a target:** if a winner is recovering toward a resting sell-limit, the scan flags **"raise the target"** before it caps you out — but moving it needs your OK (selling higher isn't de-risking, so it isn't automatic).
-- **Approvals:** the scan **auto-tightens** stops (de-risk only, no approval). **Closing a position always needs your explicit OK.**
-
-> These exit rules were tuned from a real trade — see the AMD 2026-06-12 retro in
-> `output/journal.md` for why the intraday exit leads with the ratchet (not a tight
-> VWAP trail) and drops the fixed target on trend days.
-
----
-
-## The life of a trade (which routine does what)
+## The life of a trade
 
 ```
   FIND          VALIDATE         ENTER            MANAGE              EXIT
   premarket  →  market-open  →  market-open  →   exit-scan      →   exit-scan
-  research      (re-check at    (you approve,    (trail the stop     (stop hit or
-  (ranked       the open)        order fires)     up, raise target,   safety exit;
-  candidates)                                     re-validate any     you approve
-                                                  unfilled orders)    the close)
+  research      (re-check at    (you approve,    (trail the stop,    (stop hit or
+  (ranked       the open)        order fires)     lock gains,         safety exit;
+  candidates)                                     re-check orders)    you approve)
 ```
 
-- **Pre-market research** — screens the watchlist + market movers, applies the rules above, and hands you a ranked shortlist with charts and proposed entry/stop/target. **Recommends only — places nothing.**
-- **Market-open execution** — first reviews what you already hold and any resting orders (stop still there? target about to fill? gapped overnight?), then re-validates the morning's candidates against the *actual* open and builds approval-ready orders.
-- **Exit scan** — the position manager. Trails stops up, raises targets, runs safety exits, and now also **re-checks unfilled entry orders** (cancel a stale/invalidated limit, re-adjust a drifted one, and a Friday sweep so a weekend gap can't fill a stale order on Monday).
-- **Daily summary** — the day's P&L, a retro on every closed trade (what we got vs. what was possible, mistakes, lessons), and end-of-day charts.
-- **Weekly review** — the week's stats, what the rules got right/wrong, and proposed tweaks for next week.
+| Routine | Skill | US Eastern | CET (approx) |
+|---|---|---|---|
+| Pre-market research | `/premarket-research` | 7:30 | ~13:30 |
+| Market-open execution | `/market-open` | 9:30 (+30 min) | ~15:30 |
+| Exit scan | `/exit-scan` | 9:30–16:00 | ~15:30–22:00 |
+| Daily summary | `/daily-summary` | after close | ~22:15 |
+| Weekly review | `/weekly-review` | Fri after close | ~22:15 Fri |
 
----
+- **Pre-market research** — ranked shortlist with charts, entry/stop/target and
+  sizing; can prepare day-trade orders for strong fits, placed only on your OK.
+- **Market-open** — reviews holdings and resting orders first, re-validates the
+  morning's candidates against the live open, builds approval-ready orders.
+- **Exit scan** — run every 5–15 min with an active day trade, hourly for swings.
+  The stop rests at IBKR between runs; the scan raises it.
+- **Daily summary** — P&L, a retro on every closed trade, end-of-day charts.
+- **Weekly review** — stats, what the rules got right/wrong, proposed tweaks
+  (never auto-applied).
 
-## Schedule
-
-US equities trade 9:30–16:00 ET. You're in CET; times shift independently on US vs
-EU DST, so all logic anchors to US/Eastern and converts dynamically.
-
-| Routine | Skill | US Eastern | CET (approx) | Cadence |
-|---|---|---|---|---|
-| Pre-market research | `/premarket-research` | 7:30 | ~13:30 | once |
-| Market-open execution | `/market-open` | 9:30 (+30m) | ~15:30 | once |
-| Exit scan | `/exit-scan` | 9:30–16:00 | ~15:30–22:00 | **day trades: every 5–15 min · swings: hourly** |
-| Daily summary | `/daily-summary` | after close | ~22:15 | once (incl. exit retro) |
-| Weekly review (Fri) | `/weekly-review` | after close | ~22:15 Fri | once |
-
-**Exit-scan cadence:** the protective stop rests at IBKR and fires between scans
-regardless — the scan's job is to *raise* it. Active day-trade runner → every **5 min**
-(matches the 5-min bar close); consolidating → 10–15 min; last 30 min to close → 5 min
-+ a hard MUST-CLOSE check at T-15. Swing-only days → hourly is plenty.
-
----
-
-## Data sources
-- **Day-trade signals:** `lib.realtime.get_intraday_bars(sym, "5m")` — yfinance, **~1 min lag** (near-real-time). Optional **Webull** tick-level via `config/webull_creds.json`. The latest bar is still forming, so the ratchet uses *completed* bars.
-- **Positions / orders / swing daily bars:** IBKR (`ib_async`). The IBKR price feed is **15-min delayed** and is **not** used for day-trade signals (delayed is fine for daily-bar swings).
+Runs are **triggered manually** (the laptop isn't always on); the schedule is a
+checklist, not a bot.
 
 ## Setup
 
-```powershell
-python -m venv .venv ; .\.venv\Scripts\Activate.ps1
+```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-1. Install & launch **IB Gateway**, log into the **paper** account first (free, delayed data).
-2. In Gateway: Configure → Settings → API → *Enable ActiveX and Socket Clients*; add `127.0.0.1` to Trusted IPs; set the Socket port to match `lib.ibkr.DEFAULT_PORT` (**4001** here — IB Gateway's paper default is often 4002, so keep the two consistent).
+1. Install and launch **IB Gateway**, logged into the **paper** account (free,
+   delayed data).
+2. Gateway → Configure → Settings → API: enable *ActiveX and Socket Clients*,
+   trust `127.0.0.1`, and set the socket port to match `lib.ibkr.DEFAULT_PORT`
+   (**4001** here; Gateway's paper default is often 4002 — keep them consistent).
 3. (Recommended) automate the daily Gateway re-login with **IBC**.
-4. Verify the connection:
-   ```powershell
+4. Check the connection:
+   ```bash
    python -c "from lib.ibkr import connect; ib=connect(); print(ib.accountSummary()[:3]); ib.disconnect()"
    ```
 
-Paper vs live is the **login**, not the port (paper = `DU…`, live = `U…`).
-`connect()` defaults to `require_paper=True` and refuses a live account unless explicitly overridden.
+Paper vs live is decided by the **login** (paper = `DU…`, live = `U…`), not the
+port. `connect()` refuses a live account unless explicitly overridden.
 
 ## Configure
-- `config/watchlist.txt` — **optional** pin list, empty by default. The candidate universe is discovered dynamically from the live market each run (`lib.screener.dynamic_universe()`) + your current holdings; pin a ticker here only to force it into every run.
-- `config/risk.yaml` — **set `account.size_usd` to your balance**; tune risk %, position caps, daily-loss limit, catastrophic %.
-- `config/strategy.yaml` — signal thresholds: VWAP, dollar-volume floors, R:R minimums, trend-day score, ratchet lookback, VWAP-trail buffer, stale-order handling, `no_exit_at_loss`.
 
-## Running
+- `config/risk.yaml` — **set `account.size_usd` to your balance**; risk %,
+  position caps, daily loss limit, catastrophic stop %.
+- `config/strategy.yaml` — signal thresholds, trailing-stop settings,
+  unfilled-order handling, `no_exit_at_loss`.
+- `config/watchlist.txt` — optional pins, empty by default (the universe is
+  discovered live each run).
+- `config/webull_creds.json` — optional, for Webull real-time data (see
+  `requirements.txt`).
 
-This runs in **assisted-trigger** mode (your laptop isn't always on): open Claude Code
-when you sit down to trade and invoke the relevant skill. The schedule is a
-reminder/checklist, not an unattended bot. For an active day-trade position, re-run
-`/exit-scan` every ~5 min — the resting broker-side stop protects you between runs.
-Move to an always-on VM + cron later for hands-off scheduling.
+## Data
 
-## Notes
-- Paper account + delayed data is **free** and runs the whole system end to end.
-- Real-time data (small monthly fee) and commissions only apply on a funded/live account.
-- See [`CLAUDE.md`](CLAUDE.md) for architecture and design decisions; [`docs/STRATEGY.md`](docs/STRATEGY.md) for the full strategy + an honest critique; `output/journal.md` for the running trade journal and retros.
+- **Day-trade signals:** `lib.realtime` — yfinance (~1 min lag) or Webull.
+- **Positions, orders, swing daily bars:** IBKR (15-min delayed on paper; not
+  used for day-trade signals).
+
+## More
+
+- [`CLAUDE.md`](CLAUDE.md) — architecture and invariants.
+- [`docs/STRATEGY.md`](docs/STRATEGY.md) — the rules, open issues, lessons log.
+- `output/journal.md` — running trade journal and retros.
 
 > Not financial advice. Trading involves risk of loss. Test thoroughly on paper.

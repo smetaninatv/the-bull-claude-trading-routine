@@ -1,6 +1,6 @@
 ---
 name: premarket-research
-description: Pre-market research (~13:30 CET / 7:30 ET, Mon-Fri). Screens the watchlist + market for day and swing candidates, computes indicators, reads overnight news, and produces a ranked candidate list with charts, proposed entry/stop/target, and risk-checked sizing. Then, for any strong-fit day-trade candidates (zero, one, or several that meet all criteria), prepares ready-to-send orders showing capital deployed vs available and projected profit-at-target / loss-at-stop, and can place them on explicit approval (human-in-the-loop — never auto-transmitted; swings stay research-only).
+description: Pre-market research (~13:30 CET / 7:30 ET, Mon-Fri). Screens the live market (dynamic universe + holdings) for day, swing and dip-reversion candidates, computes indicators, reads overnight news, and produces a ranked candidate list with charts, proposed entry/stop/target, and risk-checked sizing. Then, for any strong-fit day-trade candidates (zero, one, or several that meet all criteria), prepares ready-to-send orders showing capital deployed vs available and projected profit-at-target / loss-at-stop, and can place them on explicit approval (human-in-the-loop — never auto-transmitted; swings stay research-only).
 ---
 
 # Pre-market research routine
@@ -43,9 +43,10 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
 1c. **ALWAYS print the ranked day-trade scan board with drivers + pros/cons** (when score >= 5). Run `lib.daytrade.scan()` then `annotate()` — this is a required output every premarket run, not optional. `annotate()` attaches each top name's **driver headline** (the news/catalyst) and **objective, rule-derived pros/cons**:
    ```python
    from lib.daytrade import scan, annotate
+   from lib.screener import market_scan
    movers = [m["sym"] for m in premarket_movers(top_n=12)]
-   liquid = ["NVDA","AMD","AVGO","MU","MRVL","SMCI","ARM","TSM","PLTR","META","TSLA","COIN","AMKR"]
-   board = annotate(scan(list(dict.fromkeys(movers + liquid))), top_n=10)  # ranked + driver + pros/cons
+   active = [r["symbol"] for r in market_scan(min_relvol=0, size=30)]   # live, no hardcoded list
+   board = annotate(scan(list(dict.fromkeys(movers + active))), top_n=10)  # ranked + driver + pros/cons
    for r in board[:10]:
        d = r.get("driver")
        drv = f"[{d['date']}] {d['title']}" if d else "(no recent headline)"
@@ -115,7 +116,7 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
    - Degrades gracefully: if a source is down it returns blanks (`—`); do not block the routine on it.
 6. **Propose levels & size.** For each pick set entry (a **zone** for day trades), stop (consider `lib.indicators.atr_stop`; for day trades the stop must clear `lib.indicators.noise_band(df, 1.5)`), target (intraday levels for day trades; "trail, no fixed target" on a trend day); size with `lib.config.position_size(entry, stop, style)`. **Verify `shares > 0` and `R:R` are real before presenting** — a 2026-06-11 run showed every candidate with `qty=0 R:R=0.0x` because sizing silently failed; never present a plan with zero/blank sizing, debug it instead. Respect `limits` in `risk.yaml` (max positions, daily loss state).
 7. **Charts + journal.** For each pick: `lib.charts.save_chart(df, sym, date_str, entry=, stop=, target=)` and `lib.journal.append_note(...)` with the rule trigger + your reasoning + chart path. Use today's date string for `date_str`.
-8. **Report** to the user. The tables are research only; the **single exception** is the #1 day-trade pick in step 9, which is prepared as an order and placed **only on your explicit approval**. Lead with the scan board, then the two detail tables.
+8. **Report** to the user. The tables are research only; step 9 may add placeable orders for strong-fit day trades (zero, one or several), sent **only on explicit approval**. Lead with the scan board, then the two detail tables.
 
    **Day-trade scan board** (from step 1c, when score >= 5; always include it): `symbol | score (0-10) | RVOL | daily ATR% | gap% | >VWAP | ORB | RS vs SPY | Driver (news headline + date) | Pros | Cons`, sorted best-first, top ~10 names. This is the "where's the action today AND why" board — the day shortlist comes off the top of it, but the **Driver** column is a veto: a high score on a pump/dubious-catalyst name (e.g. high RVOL + no news) is a pass, not a buy.
 
@@ -140,7 +141,7 @@ Goal: hand the user a ranked, decision-ready shortlist of day- and swing-trade c
    - **Offer ONLY strong fits — quality over a count.** A name qualifies only if it clears **every** day gate with conviction: `day_trade_conditions()["score"] >= 5`, high **RVOL**, ATR% in the juice range, above VWAP (where formed) / clean pre-open level, a **legit driver (not a high-RVOL-no-news pump)**, and **R:R >= 2**. **It can be zero, one, or several** — never force a pick. If nothing qualifies, say "**no strong-fit day trade today — placing nothing**" and stop. **Swings stay research-only** here (act on them in `/market-open`).
    - **Levels (pre-open caveat):** VWAP/ORB aren't formed before 9:30 ET, so build the entry from **pre-market levels** — a limit at the premarket-high breakout / prior-day-high reclaim (buy the level, don't chase; entry ≤ lowest realistic fill). Protective stop = `lib.config.catastrophic_stop(entry)`, widened to clear `lib.indicators.noise_band(df, 1.5)`. Target from intraday levels (prior-day / premarket high or measured move); on a trend day use a 2R estimate labelled "trail — est."
    - **Show the money — pull available capital and offer two sizes.** `avail = lib.ibkr.account_value(ib, "AvailableFunds")`, `bp = lib.ibkr.account_value(ib, "BuyingPower")`. For each strong-fit pick present BOTH:
-     - **Risk-capped (default):** `qty = lib.config.position_size(entry, stop, "day")` — honors `risk.yaml` (1.3% risk, 43%/name cap).
+     - **Risk-capped (default):** `qty = lib.config.position_size(entry, stop, "day")` — honors `risk.yaml` (`day_trading.risk_per_trade_pct` / `max_position_pct`).
      - **Conviction / all-in:** `qty_max = floor(min(avail, bp) / entry)` — the most the account can fund (respect PDT + a single-name sanity check). The user has said they'll size up on a great setup, so **offer it**, but make the downside explicit.
    - **For each pick AND each size, show in the ask:** `shares | 💵 $ deployed (shares×entry) | % of available | entry | stop | target | R:R | 💰 profit if target hit ($ = shares×(target−entry) and %) | 🔻 loss if stopped ($ = shares×(entry−stop) and %)`. **Always show the loss figure — it is the real check on going all-in.** Verify `shares > 0` and R:R are real; enforce PDT + daily-loss limits.
    - **Build un-transmitted at the chosen size:** `contract, orders = lib.ibkr.prepare_entry(ib, sym, "BUY", qty, entry, stop)` (both `transmit=False`). Orders rest as pre-open limits that fill at/after the open; **`/market-open` step 1c re-validates them against live VWAP** and can cancel/re-adjust if the open invalidates the setup.

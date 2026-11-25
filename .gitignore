@@ -24,3 +24,6 @@ __pycache__/
 # Generated output (charts + journal) — keep the folder, ignore contents
 output/*
 !output/.gitkeep
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
