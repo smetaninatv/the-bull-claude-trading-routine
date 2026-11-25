@@ -54,13 +54,28 @@ ratcheting trailing stop that only moves up.
 - **Weekly review** — stats, what the rules got right/wrong, proposed tweaks
   (never auto-applied).
 
-Runs are **triggered manually** (the laptop isn't always on); the schedule is a
-checklist, not a bot.
+### Running it: the trading desk agent
+
+```bash
+claude --agent trading-desk
+```
+
+The desk checks the US/Eastern clock and its run log, runs whichever routine is
+due, asks you to approve any order, then schedules its own next check (every
+5–15 min with an active day trade, hourly for swings). Leave the session open
+while you trade; it stops after the daily summary and tells you when the next
+session starts. You can still run any skill by hand, e.g. `/exit-scan`.
+
+Check-ins only happen while that session is open (the laptop isn't always on).
+Between them, your protection is the stop resting at IBKR.
 
 ## Setup
 
+Needs **Python ≥ 3.10** (`ib_async` requirement; macOS's built-in 3.9 is too
+old, so use e.g. `brew install python@3.12`).
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 

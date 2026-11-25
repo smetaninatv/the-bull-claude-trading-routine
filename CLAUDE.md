@@ -76,7 +76,13 @@ copying numbers.
 - `lib/charts.py` — annotated `mplfinance` PNGs.
 - `lib/journal.py` — markdown journal, SQLite trade log, monthly perf tracker.
 - `lib/config.py` — load YAML/watchlist, `catastrophic_stop`, `position_size`.
+- `lib/desk.py` — `desk_status()` (which routine is due, from the ET clock +
+  `output/desk_runs.json`) and `record_run()`. No IBKR connection.
 - `.claude/skills/<routine>/SKILL.md` — the five routines (procedure only).
+- `.claude/agents/trading-desk.md` — the desk agent: runs the due routine,
+  then schedules the next check. Run as the main session
+  (`claude --agent trading-desk`). Background subagents can't ask questions or
+  schedule wakeups, so approvals need it to be the main session.
 - `output/` — charts per run (`output/charts/<date>/`), `journal.md`/`.db`
   (git-ignored).
 
