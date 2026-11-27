@@ -1,7 +1,7 @@
 """Scalping-setup detectors (long-biased; each notes the short mirror).
 
 Implements the mechanical entry/stop/target rules from the five scalping
-cheat sheets (2026-08-10). Each detector takes intraday 1-minute bars (with a
+cheat sheets. Each detector takes intraday 1-minute bars (with a
 `vwap` column via lib.indicators.add_vwap) and returns a signal dict or None:
 
     {setup, side, entry, stop, targets:[...], rr, factors:[...], caveats:[...]}

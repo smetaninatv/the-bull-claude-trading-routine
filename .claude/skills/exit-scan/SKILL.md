@@ -9,6 +9,12 @@ Goal: maintain a **ratcheting 2-bar trailing stop** on each position and exit wh
 
 > **Market-holiday guard — check FIRST.** Call `lib.realtime.market_session()`. If it returns `"holiday"`, the US market is **closed today** — there is no live tape and no bars print, so the ratchet/scan has nothing to do. Note "🛑 Market closed — *<holiday>*; resting stops stay in place, next session *<next_trading_day>*" and **skip the scan** (your protective stops still rest at IBKR and fire on the next session). Resume normal cadence on the next trading day.
 
+> **Runs whenever the market is trading.** Run the scan in every live session — `lib.realtime.market_session()` in `lib.hours.LIVE_SESSIONS` (`pre`, `open`, `post`, `overnight`); skip only when it is `closed`/`holiday`. Outside regular hours (`session != "open"`):
+> - **IBKR stop orders do not trigger** outside regular hours, so a resting stop gives no protection then. If price is at/through a position's stop level, the stop won't fire: present a **limit** exit (no market orders outside RTH) just under the bid, for approval, per the usual exit rules (`no_exit_at_loss` still applies above the catastrophic floor).
+> - Swing ratchets use daily bars, so they only move once per session; raising a stop overnight is fine (it rests for the next regular session).
+> - Use near-real-time quotes (`lib.realtime.current_quote`) for extended-hours prices and label them extended/thin.
+> - Cadence outside regular hours: hourly for swings.
+
 ## Cadence — how often to run
 
 The real downside protection is the **stop order resting at IBKR**, which fires instantly between scans regardless of when this runs. The scan's job is to **raise** that stop (ratchet up), detect re-entry, and run safety exits — so cadence controls how *current* the trailed stop is, not whether you're protected.
@@ -47,11 +53,11 @@ When `strategy.exits.no_exit_at_loss` is true (default), **never realize a loss*
 
 Because the laptop isn't always on, the protective stop must live as a **resting stop order at IBKR**, not just in this scan — so it protects the position between runs. Find the current resting stop via `lib.ibkr.open_orders(ib)`. The resting stop starts at the **catastrophic floor** (placed at entry) and never goes below it. Each scan: recompute the ratcheted 2-bar level; if it's **strictly higher** than the current resting stop **and >= average cost** (per the no-loss rule above), **AUTO-RAISE the stop order to the new level — no approval needed** (raising a protective stop only de-risks). **Never lower a stop.** If `price <= stop` and the exit would be at breakeven+, that's an exit: propose a close for approval (see below).
 
-## In-profit auto-lock: ratchet stop + chart target (user rule, 2026-07-15)
+## In-profit auto-lock: ratchet stop + chart target (user rule)
 
 When a position is **in profit** — current price **> average cost** ("a stock I've earned") — **automatically convert it to a resting ratchet-stop + chart-target OCA pair, no approval.** Setting/raising the stop at or above cost only locks in a gain (de-risking), so — like a stop-raise — it is transmitted immediately. This supersedes the "loose target-only" state such a winner is often left in (a resting limit-sell with no protective stop).
 
-**Gain-size guard — check BEFORE locking.** Only lock when the open gain is at least **0.5×ATR**: `lib.ibkr.should_profit_lock(avg_cost, last, atr)`. A position only *marginally* above cost produces a lock stop pinned within a tick of market (`profit_lock_stop` clamps to `last − tick`), which fires on **any** downtick — turning a live swing into an instant breakeven exit and destroying the thesis. (BABA 2026-07-20: a +$3.35 open gain would have set the stop $0.01 under market.) If the guard returns False, **leave existing protection alone and wait** — report it as "marginally green, below lock threshold."
+**Gain-size guard — check BEFORE locking.** Only lock when the open gain is at least **0.5×ATR**: `lib.ibkr.should_profit_lock(avg_cost, last, atr)`. A position only *marginally* above cost produces a lock stop pinned within a tick of market (`profit_lock_stop` clamps to `last − tick`), which fires on **any** downtick — turning a live swing into an instant breakeven exit and destroying the thesis. (BABA: a +$3.35 open gain would have set the stop $0.01 under market.) If the guard returns False, **leave existing protection alone and wait** — report it as "marginally green, below lock threshold."
 
 Do this for every held long where `last > avg_cost` **and** `should_profit_lock(...)` is True:
 
@@ -69,7 +75,7 @@ Do this for every held long where `last > avg_cost` **and** `should_profit_lock(
 
 On a **subsequent** scan the position is already locked: only **raise** the stop if a new `profit_lock_stop(...)` is strictly higher (auto, de-risking); leave the target unless a `RAISE TARGET` proximity flag fires (step 4b — still a suggestion). If price falls back **below avg cost**, do not lower the stop below cost — the no-loss rule takes over (hold, catastrophic floor only).
 
-## Scalp exits (added 2026-08-10)
+## Scalp exits
 
 When a position was opened as a scalp (`lib.scalps`, tagged in the journal), manage its exit by that setup's rule — these are faster/tighter than the 2-bar ratchet:
 - **rubber_band** → exit in **thirds**: ⅓ at 1R, ⅓ at 2R, final ⅓ into VWAP. Hard stop .02 below LoD; **2 strikes/day** then done.
@@ -84,12 +90,12 @@ These are position-closing actions → still **human-approved** before transmitt
 
 Day trades require intraday exit management — they use **5-min bars and a real-time price feed**, not daily bars. Two extra rules apply to day trades only:
 
-- **Near-close alert:** if a day trade position is still open with **≤ 15 minutes to the 4 PM ET close** (`lib.realtime.minutes_to_close() <= 15`), flag it as `MUST CLOSE` immediately regardless of the ratchet stop. Prepare a market order with `transmit=False` and present it for approval. Carrying a day trade overnight is not allowed unless the user explicitly converts it to a swing.
+- **Near-close alert:** if a day trade position is still open with **≤ 15 minutes to the regular close** (`lib.realtime.minutes_to_close() <= 15`, which follows IBKR's schedule incl. early closes; never hardcode the close time), flag it as `MUST CLOSE` immediately regardless of the ratchet stop. Prepare a market order with `transmit=False` and present it for approval. Carrying a day trade overnight is not allowed unless the user explicitly converts it to a swing.
 - **Real-time bars:** for day trade stops, use `lib.realtime.get_intraday_bars(sym, "5m")` (Webull if configured, else yfinance near-real-time) instead of `lib.data.intraday_bars()` (15-min delayed).
 
 ## Day trade trailing stop (2-bar ratchet primary, VWAP-trail as floor)
 
-**Lesson — AMD 2026-06-12:** the VWAP-trail was the *worst*-performing stop that day (it exited at the bottom of a flush that immediately reversed and ran +$10 higher). The 2-bar ratchet was the best. So for day trades the **2-bar ratchet leads**; the VWAP-trail is only a floor beneath it.
+**Lesson — AMD:** the VWAP-trail was the *worst*-performing stop that day (it exited at the bottom of a flush that immediately reversed and ran +$10 higher). The 2-bar ratchet was the best. So for day trades the **2-bar ratchet leads**; the VWAP-trail is only a floor beneath it.
 
 **Primary stop:** `lib.indicators.day_trade_stop(df, current_resting_stop=resting, vwap_buffer_atr=1.5)` on 5-min bars (call `add_vwap(df)` first). This returns `max(2bar_ratchet, vwap_floor, current_resting_stop)` — the ratchet adapts to structure, the VWAP floor (`VWAP − 1.5×ATR`, widened from 0.5×) only lifts the stop when the ratchet is below it, and it never lowers an existing stop (up-only).
 
@@ -108,7 +114,7 @@ Day trades require intraday exit management — they use **5-min bars and a real
    from lib.realtime import get_intraday_bars, minutes_to_close
    ```
 2. **Pull portfolio + open orders:** `lib.ibkr.portfolio(ib)` (gives avg cost + unrealized P&L per holding) and `lib.ibkr.open_orders(ib)` (existing resting stops). If flat, report it and stop. (Held tickers no longer need adding to a watchlist — the universe is discovered dynamically each run via `lib.screener.dynamic_universe(extra=holdings)`, and every routine always pulls current holdings from `portfolio(ib)` directly.)
-   - **Order integrity check:** for every open position, verify a resting stop order exists. **Read orders via `lib.ibkr.open_orders(ib)` — NOT raw `ib.openTrades()`.** On this Gateway `openTrades()` returns empty if read before `reqAllOpenOrders()` populates; `open_orders()` requests, waits, and retries so an empty result is real (2026-06-12: a single empty read would have falsely flagged every position UNPROTECTED). Only if `open_orders()` still shows no stop for a position → flag `UNPROTECTED`, re-place the stop at the catastrophic floor (or last known profit-lock level if above cost), and report it before continuing.
+   - **Order integrity check:** for every open position, verify a resting stop order exists. **Read orders via `lib.ibkr.open_orders(ib)` — NOT raw `ib.openTrades()`.** On this Gateway `openTrades()` returns empty if read before `reqAllOpenOrders()` populates; `open_orders()` requests, waits, and retries so an empty result is real (a single empty read would have falsely flagged every position UNPROTECTED). Only if `open_orders()` still shows no stop for a position → flag `UNPROTECTED`, re-place the stop at the catastrophic floor (or last known profit-lock level if above cost), and report it before continuing.
 3. **For each holding:**
    - Determine style (swing or day) from the journal / position tag.
    - Pull bars on the style's exit timeframe (with lead-in):
@@ -123,13 +129,13 @@ Day trades require intraday exit management — they use **5-min bars and a real
    - *Day:* **loses session VWAP**, or held near the close (don't carry day trades overnight unless intended).
    - **Daily loss limit** (`risk.yaml`): if the account is down past `daily_loss_limit_pct`, lean toward de-risking.
 
-4b. **Resting target proximity — flag "RAISE TARGET" before a winner caps out.** For any held position that has a **resting limit-sell target** (find it in `lib.ibkr.open_orders(ib)`): if the current price has recovered to **within ~1×ATR of that target** AND the trend/levels support more upside (price above 200 SMA / 8 EMA, or a documented analyst target sits above the resting limit), **flag `RAISE TARGET`** with a suggested higher level (next resistance via `lib.indicators.find_resistance`, or the higher analyst target). This is a **suggestion only** — selling higher is **not** de-risking, so unlike a stop-raise it **must NOT be auto-applied**; present it for approval before moving the order. The lesson: IBKR 2026-06-12 filled its $91 limit, then ran to $93.10 four minutes later — the target should have been raised first (analyst levels $93/$98 sat above $91). Skip the flag if price is far from the target or the trend has rolled over (just let it fill).
+4b. **Resting target proximity — flag "RAISE TARGET" before a winner caps out.** For any held position that has a **resting limit-sell target** (find it in `lib.ibkr.open_orders(ib)`): if the current price has recovered to **within ~1×ATR of that target** AND the trend/levels support more upside (price above 200 SMA / 8 EMA, or a documented analyst target sits above the resting limit), **flag `RAISE TARGET`** with a suggested higher level (next resistance via `lib.indicators.find_resistance`, or the higher analyst target). This is a **suggestion only** — selling higher is **not** de-risking, so unlike a stop-raise it **must NOT be auto-applied**; present it for approval before moving the order. The lesson: IBKR filled its $91 limit, then ran to $93.10 four minutes later — the target should have been raised first (analyst levels $93/$98 sat above $91). Skip the flag if price is far from the target or the trend has rolled over (just let it fill).
 
 4c. **Unfilled resting entry orders — staleness, invalidation & weekend check.** Read `lib.ibkr.open_orders(ib)`; a resting entry is any open **BUY** order whose symbol is **not** in the portfolio (a pending entry, not a holding). For each, flag (suggestion only — **needs approval**, since cancelling/moving an entry is not de-risking):
    - **Setup invalidated intraday** → recommend CANCEL: price has broken the thesis (swing lost 200 SMA / 8 EMA; day lost VWAP), or has run far enough above the limit that a fill would only come on a pullback no longer wanted.
    - **Stale** → recommend CANCEL: resting unfilled longer than `orders.stale_entry_sessions` (default 3) with no sign of filling.
    - **Drifted** → recommend RE-ADJUST: setup intact but the limit/stop/target no longer reflect the right levels; propose new ones (move all bracket legs together).
-   - **Pre-weekend (Friday, last scan before close)** → if `orders.cancel_unfilled_before_weekend` is true, flag every unfilled entry for a **keep/cancel decision** before the weekend — a Friday GTC limit can fill on a Monday gap into weakness with no human re-check, and correlated names can all fill at once (TSM/MRVL/CRWD 2026-06-12). Recommend cancelling the weak/extended ones; keep only the cleanest, highest-conviction setups.
+   - **Pre-weekend (Friday, last scan before close)** → if `orders.cancel_unfilled_before_weekend` is true, flag every unfilled entry for a **keep/cancel decision** before the weekend — a Friday GTC limit can fill on a Monday gap into weakness with no human re-check, and correlated names can all fill at once (TSM/MRVL/CRWD). Recommend cancelling the weak/extended ones; keep only the cleanest, highest-conviction setups.
    Never auto-cancel or auto-move an entry — present and act on approval. Cancel a prior-session order with the master client (`connect(client_id=0)`); the default client gets Error 10147 on another session's orders.
 
 5. **Apply the action types:**

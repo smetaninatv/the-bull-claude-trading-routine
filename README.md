@@ -44,6 +44,10 @@ ratcheting trailing stop that only moves up.
 | Daily summary | `/daily-summary` | after close | ~22:15 |
 | Weekly review | `/weekly-review` | Fri after close | ~22:15 Fri |
 
+Session hours (early closes, holidays, overnight) come from IBKR's published
+schedule, not from fixed dates. Orders may fill outside regular hours and
+overnight, and the exit scan runs whenever a session is live.
+
 - **Pre-market research** — ranked shortlist with charts, entry/stop/target and
   sizing; can prepare day-trade orders for strong fits, placed only on your OK.
 - **Market-open** — reviews holdings and resting orders first, re-validates the

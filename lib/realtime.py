@@ -74,7 +74,7 @@ def us_market_holidays(year):
 
     Covers fixed-date holidays (with Sat->Fri / Sun->Mon observance), the
     Monday/Thursday floating holidays, and Good Friday (Easter-derived).
-    Does NOT include half-days (e.g. day after Thanksgiving) — those still trade.
+    Fallback only: the live schedule (incl. early closes) comes from IBKR via lib.hours.
     """
     h = {}
     nyd = datetime.date(year, 1, 1)
@@ -84,8 +84,7 @@ def us_market_holidays(year):
     h[_nth_weekday(year, 2, 0, 3)] = "Presidents' Day"
     h[_easter(year) - datetime.timedelta(days=2)] = "Good Friday"
     h[_last_weekday(year, 5, 0)] = "Memorial Day"
-    if year >= 2022:                             # Juneteenth became a market holiday in 2022
-        h[_observed(datetime.date(year, 6, 19))] = "Juneteenth"
+    h[_observed(datetime.date(year, 6, 19))] = "Juneteenth"
     h[_observed(datetime.date(year, 7, 4))] = "Independence Day"
     h[_nth_weekday(year, 9, 0, 1)] = "Labor Day"
     h[_nth_weekday(year, 11, 3, 4)] = "Thanksgiving Day"
@@ -93,24 +92,54 @@ def us_market_holidays(year):
     return h
 
 
+def is_early_close(d=None):
+    """"closes HH:MM ET" if IBKR's published schedule shows the regular session
+    on `d` (default today ET) ending before the normal `session.rth_close`,
+    else None. Not hardcoded: it is read from IBKR's liquid hours
+    (lib.hours), so it is None when no schedule is cached for `d`."""
+    from lib import hours
+    d = d or _et_today()
+    if hours.source(d) != "ibkr":
+        return None
+    win = hours.rth_window(d)
+    if win and win[1].time() < hours.standard_rth_close():
+        return f"closes {win[1]:%H:%M} ET"
+    return None
+
+
 def _et_today():
     import pytz
     return datetime.datetime.now(pytz.timezone("US/Eastern")).date()
 
 
-def is_market_holiday(d=None):
-    """Holiday name if `d` (default: today ET) is a US market holiday, else None."""
-    if d is None:
-        d = _et_today()
+def is_rule_holiday(d):
+    """Holiday name from the standing NYSE rules above (fallback calendar)."""
     return us_market_holidays(d.year).get(d)
 
 
+def is_market_holiday(d=None):
+    """Holiday name if `d` (default: today ET) is a weekday with no regular
+    session, else None. IBKR's published schedule wins when cached (lib.hours);
+    otherwise the standing NYSE holiday rules are used."""
+    from lib import hours
+    if d is None:
+        d = _et_today()
+    if d.weekday() >= 5:
+        return None
+    if hours.source(d) == "ibkr":
+        if hours.rth_window(d) is not None:
+            return None
+        return is_rule_holiday(d) or "US market holiday (IBKR schedule)"
+    return is_rule_holiday(d)
+
+
 def next_trading_day(d=None):
-    """Next date after `d` (default today ET) that is a weekday and not a holiday."""
+    """Next date after `d` (default today ET) that has a regular session."""
+    from lib import hours
     if d is None:
         d = _et_today()
     nd = d + datetime.timedelta(days=1)
-    while nd.weekday() >= 5 or is_market_holiday(nd):
+    while hours.rth_window(nd) is None:
         nd += datetime.timedelta(days=1)
     return nd
 
@@ -119,59 +148,63 @@ def next_trading_day(d=None):
 # Market session
 # ---------------------------------------------------------------------------
 
-def market_session():
-    """Return 'holiday', 'pre', 'open', 'post', or 'closed' (US/Eastern).
+# Session clock: lib.hours (IBKR's published trading hours, cached; standard
+# hours from config/strategy.yaml `session:` when nothing is cached).
+from lib.hours import LIVE_SESSIONS  # noqa: E402  (re-exported)
 
-    'holiday' takes precedence (full-closure days); weekends return 'closed'.
-    """
+
+def _now_et():
     import pytz
+    return datetime.datetime.now(pytz.timezone("US/Eastern"))
 
-    now_dt = datetime.datetime.now(pytz.timezone("US/Eastern"))
-    if is_market_holiday(now_dt.date()):
-        return "holiday"
-    if now_dt.weekday() >= 5:                     # Sat/Sun
-        return "closed"
-    now = now_dt.time()
-    if datetime.time(4, 0) <= now < datetime.time(9, 30):
-        return "pre"
-    if datetime.time(9, 30) <= now < datetime.time(16, 0):
-        return "open"
-    if datetime.time(16, 0) <= now < datetime.time(20, 0):
-        return "post"
-    return "closed"
+
+def rth_close_time(d=None):
+    """Regular-session close time on date `d` (early closes from IBKR), or the
+    standard close when there is no session that day."""
+    from lib import hours
+    win = hours.rth_window(d or _et_today())
+    return win[1].time() if win else hours.standard_rth_close()
+
+
+def session_at(now=None):
+    """Session label at `now`: 'overnight' | 'pre' | 'open' | 'post' |
+    'holiday' | 'closed'. See lib.hours.session_at."""
+    from lib import hours
+    return hours.session_at(now)
+
+
+def market_session():
+    """Current session label (see `session_at`)."""
+    return session_at()
 
 
 def market_closed_reason(d=None):
     """Human reason the market is closed right now, or None if a session is live.
 
     One guard for the routines: covers **holidays AND weekends** (and weekday
-    off-hours) with a single clear message. Returns None when `market_session()`
-    is a tradeable/extended session ('pre'/'open'/'post') so the routine proceeds.
-    Examples: "Juneteenth (US holiday)", "the weekend (Saturday)",
-    "outside trading hours (US/Eastern)".
+    off-hours) with a single clear message. Returns None in any session where
+    US stocks trade (`LIVE_SESSIONS`, incl. overnight)
+    so the routine proceeds. Examples: "Juneteenth (US holiday)",
+    "the weekend (Saturday)", "outside trading hours (US/Eastern)".
     """
-    import pytz
-
     sess = market_session()
-    if sess in ("pre", "open", "post"):
+    if sess in LIVE_SESSIONS:
         return None
     hol = is_market_holiday()
     if hol:
         return f"{hol} (US holiday)"
-    now = datetime.datetime.now(pytz.timezone("US/Eastern"))
+    now = _now_et()
     if now.weekday() >= 5:
         return f"the weekend ({now:%A})"
     return "outside trading hours (US/Eastern)"
 
 
 def minutes_to_close():
-    """Minutes remaining until 4 PM ET. Negative if after close."""
-    import datetime
-    import pytz
-
-    et = pytz.timezone("US/Eastern")
-    now = datetime.datetime.now(et)
-    close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    """Minutes until today's REGULAR-session close (early closes come from
+    IBKR's published schedule). Negative after it."""
+    now = _now_et()
+    c = rth_close_time(now.date())
+    close = now.replace(hour=c.hour, minute=c.minute, second=0, microsecond=0)
     return int((close - now).total_seconds() / 60)
 
 
@@ -182,11 +215,14 @@ def minutes_since_open():
     a CET wall-clock schedule drifts vs the US open when US/EU DST shift on
     different dates. Use to gate the market-open routine to a real post-open time.
     """
-    import pytz
-
-    et = pytz.timezone("US/Eastern")
-    now = datetime.datetime.now(et)
-    open_dt = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    from lib import hours
+    now = _now_et()
+    win = hours.rth_window(now.date())
+    if win:
+        open_dt = win[0]
+    else:
+        o = hours._cfg()["rth_open"]
+        open_dt = now.replace(hour=o.hour, minute=o.minute, second=0, microsecond=0)
     return int((now - open_dt).total_seconds() / 60)
 
 
@@ -202,10 +238,9 @@ def market_open_ready():
     a trading session) — don't run the open review yet. Returns False on
     holidays/weekends/pre-market and in the first MARKET_OPEN_DELAY_MIN minutes.
     """
-    if market_closed_reason() is not None:
+    if market_session() != "open":                     # regular hours only
         return False
-    m = minutes_since_open()
-    return 0 <= m - MARKET_OPEN_DELAY_MIN < 360        # within the trading session, past the delay
+    return minutes_since_open() >= MARKET_OPEN_DELAY_MIN
 
 
 # ---------------------------------------------------------------------------

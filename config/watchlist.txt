@@ -1,4 +1,4 @@
-# Watchlist — now OPTIONAL and empty by default (2026-08-10).
+# Watchlist — now OPTIONAL and empty by default.
 #
 # The candidate universe is discovered DYNAMICALLY every run from the live
 # market — the full-market relative-volume scan + Yahoo Finance screens +

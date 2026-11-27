@@ -90,7 +90,7 @@ def discover(names=("gainers", "most_active"), per=25, market_scan_kwargs=None):
 def dynamic_universe(names=("gainers", "most_active", "growth_tech"), per=25,
                      min_relvol=0, include_movers=True, top_movers=12,
                      extra=None):
-    """The fully-dynamic candidate universe — NO static watchlist (2026-08-10).
+    """The fully-dynamic candidate universe — NO static watchlist.
 
     Searches the live market every call and unions every source already wired up:
       1. the full-market relative-volume scan (`market_scan`, TradingView-style),
@@ -204,7 +204,7 @@ def market_scan_symbols(**kwargs):
 def oversold_reversion(extra=None, per=40, knife_gate_200=True, want=("BUYABLE_DIP",),
                        include_wait=False):
     """Discover beaten-down names that are turning back up — the mean-reversion
-    board (2026-10-20). Complements discover()/dynamic_universe(), which only look
+    board. Complements discover()/dynamic_universe(), which only look
     at gainers/most-active (momentum). This looks at the LOSERS.
 
     Pulls Yahoo's `day_losers` + `most_shorted` screens (the names that DROPPED),

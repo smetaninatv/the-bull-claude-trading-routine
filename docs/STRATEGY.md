@@ -172,7 +172,11 @@ orders are cancelled with `connect(client_id=0)`.
 ## 7. Open issues
 
 - **Gap risk:** a stop is not a guaranteed fill; overnight gaps can exceed the
-  catastrophic %.
+  catastrophic %. IBKR stop orders only trigger in regular hours, so a stop
+  does nothing during the extended sessions.
+- **Overnight fills:** with `orders.outside_rth` and `orders.overnight` on,
+  orders can fill in the overnight session, in thin liquidity. A GTC entry limit can fill at
+  3 a.m. ET on a headline, hours before any routine sees it.
 - **No correlation / sector cap:** five correlated tech names are effectively
   one bet, and day trades may deploy up to `day_trading.max_position_pct`.
 - **No slippage / commission model** in paper results.
@@ -183,18 +187,18 @@ orders are cancelled with `connect(client_id=0)`.
 
 ## Lessons log (why the rules look like this)
 
-| Date | Trade | Lesson → rule |
-|---|---|---|
-| 2026-06-07 | — | `no_exit_at_loss` was unbounded → catastrophic floor + size off it |
-| 2026-06-08/12 | various | `find_resistance` returned stale far-below levels → nearest-level search |
-| 2026-06-11 | premarket run | Every candidate showed qty=0 → always verify shares > 0 before presenting |
-| 2026-06-12 | AMD | VWAP-trail exited at a flush bottom → 2-bar ratchet primary, VWAP floor widened 0.5→1.5 ATR; no fixed target on trend days; re-entry on VWAP reclaim |
-| 2026-06-12 | AMD $512 stop | Round number inside the range was shaken out → noise-band + no round numbers |
-| 2026-06-12 | CRWV | Valid entry lost to latency → pre-build orders at validation; entry as a zone |
-| 2026-06-12 | IBKR | $91 limit filled, ran to $93.10 → RAISE-TARGET proximity flag |
-| 2026-06-12 | TSM/MRVL/CRWD | Stale correlated entries filled together → unfilled-order re-validation + Friday sweep |
-| 2026-06-12 | Gateway | Single empty `openTrades()` read looked like "unprotected" → always use `open_orders()` |
-| 2026-06-15 | AMD | Marketable limit $5 above VWAP faded → non-marketable limit, `max_entry_above_vwap_atr` |
-| 2026-06-22/24 | COIN/SMCI/PTCT | Bought extended / non-Stage-2 names → `entry_quality` gate |
-| 2026-07-20 | BABA | Lock on a tiny gain put the stop 1¢ under market → 0.5×ATR lock threshold |
-| 2026-10-20 | book review | Winners were mean-reversion (CCL, COIN, NBIS, BABA, OKTA, RDDT/UBER) → dip-reversion lens |
+| Trade | Lesson → rule |
+|---|---|
+| — | `no_exit_at_loss` was unbounded → catastrophic floor + size off it |
+| various | `find_resistance` returned stale far-below levels → nearest-level search |
+| premarket run | Every candidate showed qty=0 → always verify shares > 0 before presenting |
+| AMD | VWAP-trail exited at a flush bottom → 2-bar ratchet primary, VWAP floor widened 0.5→1.5 ATR; no fixed target on trend days; re-entry on VWAP reclaim |
+| AMD $512 stop | Round number inside the range was shaken out → noise-band + no round numbers |
+| CRWV | Valid entry lost to latency → pre-build orders at validation; entry as a zone |
+| IBKR | $91 limit filled, ran to $93.10 → RAISE-TARGET proximity flag |
+| TSM/MRVL/CRWD | Stale correlated entries filled together → unfilled-order re-validation + Friday sweep |
+| Gateway | Single empty `openTrades()` read looked like "unprotected" → always use `open_orders()` |
+| AMD | Marketable limit $5 above VWAP faded → non-marketable limit, `max_entry_above_vwap_atr` |
+| COIN/SMCI/PTCT | Bought extended / non-Stage-2 names → `entry_quality` gate |
+| BABA | Lock on a tiny gain put the stop 1¢ under market → 0.5×ATR lock threshold |
+| book review | Winners were mean-reversion (CCL, COIN, NBIS, BABA, OKTA, RDDT/UBER) → dip-reversion lens |

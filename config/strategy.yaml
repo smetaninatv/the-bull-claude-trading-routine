@@ -25,7 +25,7 @@ day:
   trend_day_score: 8         # day_trade_conditions score >= this = trend day:
                              #   NO fixed target (trail only) + enable post-stop re-entry
   noise_band_atr_mult: 1.5   # min stop distance = this × 5-min ATR (avoid shakeouts)
-  # Entry price discipline (AMD 2026-06-15: bought $5/0.25xATR above VWAP, faded).
+  # Entry price discipline (AMD: bought $5/0.25xATR above VWAP, faded).
   # Entry is a NON-marketable limit at the pullback level — buy the dip, never chase.
   entry_limit_vwap_buffer_atr: 0.1  # entry limit = VWAP + this × ATR (just above VWAP)
   max_entry_above_vwap_atr: 0.2     # if price is already >this×ATR above VWAP, don't enter
@@ -36,6 +36,24 @@ orders:
   stale_entry_sessions: 3            # cancel-recommend an entry resting unfilled this many sessions
   cancel_unfilled_before_weekend: true  # Fri last scan: flag every unfilled entry for keep/cancel
                                         # (avoid a Monday gap filling a stale limit into weakness)
+  # When orders may fill (user rules):
+  outside_rth: true          # fill in pre-/post-market, not only 9:30-16:00
+  overnight: true            # also trade the overnight session when IBKR offers one
+  overnight_exchange: OVERNIGHT   # IBKR venue for orders placed during the overnight session
+
+session:
+  # The live schedule (early closes, holidays, overnight hours) is read from
+  # IBKR's published trading hours and cached in output/market_hours.json
+  # (lib.hours). These standard hours (ET) are used only for dates the cache
+  # doesn't cover — no overnight, no early closes.
+  pre_open: "04:00"
+  rth_open: "09:30"
+  rth_close: "16:00"
+  post_close: "20:00"
+  hours_symbol: SPY          # contract whose schedule stands in for US stocks
+  hours_refresh_hours: 12    # refetch IBKR hours when the cache is older than this
+  hours_retry_minutes: 60    # after a failed fetch, wait this long before retrying
+  hours_timeout_s: 8         # per request; a slow Gateway never blocks connect()
 
 exits:
   trailing_lookback: 2    # 2-bar trailing stop: exit if price drops below the
@@ -46,7 +64,7 @@ exits:
   swing_timeframe: "1 day"
   day_timeframe: "5 mins"
   # Day-trade stop: 2-bar ratchet is PRIMARY; VWAP-trail is a FLOOR beneath it.
-  # (AMD 2026-06-12: VWAP-trail alone exited at the bottom of a flush that reversed.)
+  # (AMD: VWAP-trail alone exited at the bottom of a flush that reversed.)
   day_vwap_buffer_atr: 1.5     # VWAP floor = VWAP − this × ATR (was 0.5, too tight)
   day_post_stop_reentry: true  # on a trend day, scan for VWAP-reclaim re-entry after a stop
   # HOLD underwater positions — no trailing/safety exit below avg cost.

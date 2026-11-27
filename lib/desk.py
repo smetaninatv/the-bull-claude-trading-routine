@@ -15,7 +15,8 @@ import os
 
 import pytz
 
-from lib.realtime import is_market_holiday, next_trading_day
+from lib import hours
+from lib.realtime import next_trading_day, rth_close_time
 
 ET = pytz.timezone("US/Eastern")
 LOCAL = pytz.timezone("Europe/Berlin")  # CET/CEST
@@ -27,8 +28,8 @@ ROUTINES = ("premarket-research", "market-open", "exit-scan",
             "daily-summary", "weekly-review")
 
 PREMARKET_FROM = datetime.time(7, 0)    # research is useful from ~7:00 ET
-OPEN = datetime.time(9, 30)
-CLOSE = datetime.time(16, 0)
+# Regular open/close come per day from lib.hours (IBKR's published schedule,
+# so early closes are not hardcoded here).
 MARKET_OPEN_WINDOW_MIN = 60             # market-open routine valid for first hour
 
 
@@ -65,17 +66,19 @@ def _ran_since(routine, since, path):
 
 
 def _is_trading_day(d):
-    return d.weekday() < 5 and not is_market_holiday(d)
+    return hours.rth_window(d) is not None
 
 
 def _last_trading_friday_close(now):
-    """The most recent Friday 16:00 ET that is at or before `now`."""
+    """The most recent Friday regular close (ET) at or before `now`
+    (that day's actual close, incl. an early close)."""
     d = now.date()
     while d.weekday() != 4:
         d -= datetime.timedelta(days=1)
-    close = ET.localize(datetime.datetime.combine(d, CLOSE))
+    close = ET.localize(datetime.datetime.combine(d, rth_close_time(d)))
     if close > now:
-        close -= datetime.timedelta(days=7)
+        d -= datetime.timedelta(days=7)
+        close = ET.localize(datetime.datetime.combine(d, rth_close_time(d)))
     return close
 
 
@@ -84,7 +87,8 @@ def desk_status(now=None, path=RUNS_PATH):
 
     Returns a dict:
       now_et, now_local     — formatted clocks
-      session               — 'pre' | 'open' | 'post' | 'closed' | 'holiday'
+      session               — lib.hours.session_at(): 'overnight' | 'pre' |
+                              'open' | 'post' | 'closed' | 'holiday'
       trading_day           — today is a weekday and not a US holiday
       minutes_since_open, minutes_to_close
       due                   — ordered list of routines to run now (may be empty)
@@ -94,43 +98,44 @@ def desk_status(now=None, path=RUNS_PATH):
     now = (now or datetime.datetime.now(ET)).astimezone(ET)
     today = now.date()
     t = now.time()
-    trading_day = _is_trading_day(today)
-    open_dt = ET.localize(datetime.datetime.combine(today, OPEN))
-    close_dt = ET.localize(datetime.datetime.combine(today, CLOSE))
+    win = hours.rth_window(today)
+    trading_day = win is not None
+    if win:
+        open_dt, close_dt = win
+    else:                                          # no session today: nominal times
+        cfg = hours._cfg()
+        open_dt = ET.localize(datetime.datetime.combine(today, cfg["rth_open"]))
+        close_dt = ET.localize(datetime.datetime.combine(today, cfg["rth_close"]))
+    CLOSE = close_dt.time()
     midnight = ET.localize(datetime.datetime.combine(today, datetime.time(0, 0)))
     since_open = int((now - open_dt).total_seconds() // 60)
     to_close = int((close_dt - now).total_seconds() // 60)
-
-    if is_market_holiday(today):
-        session = "holiday"
-    elif not trading_day:
-        session = "closed"
-    elif datetime.time(4, 0) <= t < OPEN:
-        session = "pre"
-    elif OPEN <= t < CLOSE:
-        session = "open"
-    elif CLOSE <= t < datetime.time(20, 0):
-        session = "post"
-    else:
-        session = "closed"
+    session = hours.session_at(now)
+    live = session in hours.LIVE_SESSIONS
 
     ran_today = lambda r: _ran_since(r, midnight, path)  # noqa: E731
     due, nxt = [], None
 
-    if trading_day and PREMARKET_FROM <= t < OPEN:
+    if trading_day and PREMARKET_FROM <= t and now < open_dt:
         if not ran_today("premarket-research"):
             due.append("premarket-research")
         else:
-            nxt = "market-open at 9:30 ET"
-    elif trading_day and OPEN <= t < CLOSE:
+            nxt = f"market-open at {open_dt:%H:%M} ET"
+            if live:
+                due.append("exit-scan")            # market is trading: keep scanning
+    elif trading_day and open_dt <= now < close_dt:
         if since_open < MARKET_OPEN_WINDOW_MIN and not ran_today("market-open"):
             due.append("market-open")
         else:
             due.append("exit-scan")            # cadence decided by open positions
-    elif trading_day and t >= CLOSE:
+    elif trading_day and now >= close_dt:
         if not ran_today("daily-summary"):
             due.append("daily-summary")
-    elif trading_day and t < PREMARKET_FROM:
+        elif live:
+            due.append("exit-scan")            # after-hours / overnight session
+    elif live:
+        due.append("exit-scan")                # overnight / pre-market before research
+    if not due and trading_day and t < PREMARKET_FROM:
         nxt = "premarket-research from 7:00 ET"
 
     # Weekly review: after Friday's close, through the weekend, once per week.
@@ -151,6 +156,7 @@ def desk_status(now=None, path=RUNS_PATH):
         "now_et": now.strftime("%a %Y-%m-%d %H:%M ET"),
         "now_local": now.astimezone(LOCAL).strftime("%H:%M %Z"),
         "session": session,
+        "hours_source": hours.source(today),
         "trading_day": trading_day,
         "minutes_since_open": since_open,
         "minutes_to_close": to_close,

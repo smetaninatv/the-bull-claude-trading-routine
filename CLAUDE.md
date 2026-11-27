@@ -23,8 +23,7 @@ copying numbers.
   lock, and re-placing a missing protective stop.
 - **Paper or live** is decided by the Gateway login (paper = `DU…`, live =
   `U…`), not the port. `connect()` accepts live only when
-  `account.allow_live: true` in `config/risk.yaml` (enabled by the user
-  2026-11-25). On a live account, every approval ask must start with
+  `account.allow_live: true` in `config/risk.yaml` (enabled by the user). On a live account, every approval ask must start with
   **LIVE — real money** (`lib.ibkr.account_mode(ib)`). Never flip
   `allow_live` yourself. Gateway API port here is `4001`
   (`lib.ibkr.DEFAULT_PORT`).
@@ -33,7 +32,7 @@ copying numbers.
 - **Entries** are non-marketable limits at a pullback level — never at or above
   market. Use `prepare_entry()` (entry + catastrophic stop, no fixed target)
   by default.
-- **Catastrophic stop** (user-mandated 2026-06-10): always compute and offer it;
+- **Catastrophic stop** (user-mandated): always compute and offer it;
   the user may decline per trade — then build without it and note the open
   downside once.
 - **`no_exit_at_loss`** (user-mandated): never propose a loss-realizing exit
@@ -44,8 +43,17 @@ copying numbers.
   judgment (news, catalyst, chart read) before recommending.
 - **Runtime:** user's laptop, not always on → skills are triggered manually.
   Don't assume a run happened on schedule.
-- **Time:** US equities, 9:30–16:00 ET. User is in **CET**. Anchor schedule
-  logic to US/Eastern and convert dynamically (US and EU DST differ).
+- **Time:** US equities, regular hours 9:30–16:00 ET. The real schedule —
+  early closes, holidays, pre/post and overnight hours — comes from IBKR's
+  published trading hours (`lib.hours`, cached in `output/market_hours.json`,
+  refreshed on `connect()`); `config/strategy.yaml` `session:` holds only the
+  standard fallback hours. **Never hardcode half days, holidays or session
+  times** in skills, docs or code; ask `lib.realtime.session_at()` /
+  `minutes_to_close()` / `is_early_close()`. User is in **CET**. Anchor
+  schedule logic to US/Eastern and convert dynamically (US and EU DST differ).
+- **Fill hours:** orders may fill outside regular hours and overnight
+  (`orders.outside_rth`, `orders.overnight` in `config/strategy.yaml`; user
+  rules).
 
 ## Schedule
 
@@ -57,6 +65,12 @@ copying numbers.
 | Daily summary | `/daily-summary` | after close | ~22:15 |
 | Weekly review | `/weekly-review` | Fri after close | ~22:15 Fri |
 
+The exit scan runs whenever a session is live (`lib.hours.LIVE_SESSIONS`:
+pre, regular, post and overnight), not only in regular hours; the desk makes
+it due in every live session. On an early-close day the regular close moves
+up and the daily summary with it, as IBKR's schedule says. CET times shift
+1 hour earlier in the weeks when only the US is on daylight time.
+
 ## Architecture
 
 - `lib/ibkr.py` — connect, account values, positions/portfolio, `open_orders`
@@ -65,8 +79,9 @@ copying numbers.
 - `lib/data.py` — IBKR historical/intraday bars (15-min delayed), IBKR scanner.
 - `lib/realtime.py` — near-real-time intraday bars (Webull if
   `config/webull_creds.json`, else yfinance), `day_trade_conditions`,
-  `premarket_movers`, `market_session`, `market_closed_reason`,
-  `minutes_to_close`. Use this, not `data.py`, for day-trade signals.
+  `premarket_movers`, `session_at` / `market_session`
+  (`overnight`/`pre`/`open`/`post`), `market_closed_reason`,
+  `is_early_close`, `minutes_to_close`. Use this, not `data.py`, for day-trade signals.
 - `lib/screener.py` — Yahoo/TradingView-style discovery: `market_scan`,
   `discover`, `dynamic_universe`, `oversold_reversion`, bar fallback.
 - `lib/daytrade.py` — day-trade ranking (`scan`, `annotate`, `latest_headline`).
@@ -80,6 +95,8 @@ copying numbers.
 - `lib/charts.py` — annotated `mplfinance` PNGs.
 - `lib/journal.py` — markdown journal, SQLite trade log, monthly perf tracker.
 - `lib/config.py` — load YAML/watchlist, `catastrophic_stop`, `position_size`.
+- `lib/hours.py` — session schedule from IBKR's published trading hours
+  (`refresh`, `session_at`, `rth_window`), with config fallback.
 - `lib/desk.py` — `desk_status()` (which routine is due, from the ET clock +
   `output/desk_runs.json`) and `record_run()`. No IBKR connection.
 - `.claude/skills/<routine>/SKILL.md` — the five routines (procedure only).

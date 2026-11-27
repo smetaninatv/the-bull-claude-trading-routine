@@ -9,6 +9,8 @@ import time
 
 from ib_async import IB, LimitOrder, Stock, StopOrder
 
+from lib.config import load_strategy
+
 HOST = "127.0.0.1"
 # This machine's Gateway API socket listens on 4001. Note: the port does NOT
 # decide paper vs live — the login does. Paper accounts are DU..., live are U....
@@ -16,12 +18,54 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 4001
 CLIENT_ID = 17
 
-# Fill in pre-/post-market (extended hours) by default. This Gateway's order
-# preset is RTH-only, which parks pre-market entries until 9:30 (the MU
-# 2026-07-09 case: a pre-market limit wouldn't fill until the flag was set).
-# Setting outsideRth at construction fills extended-hours. (User-mandated
-# 2026-07-10: "always use outsideRTH=True".)
-OUTSIDE_RTH = True
+# When orders may fill: config/strategy.yaml `orders.outside_rth` /
+# `orders.overnight`. This Gateway's order preset is RTH-only, which parks
+# pre-market entries until 9:30 (the MU case: a pre-market limit
+# wouldn't fill until the flag was set), so outsideRth is set at construction.
+# (User rules: "always use outsideRTH=True"; "let
+# orders fill overnight as well".)
+def _orders_cfg():
+    return (load_strategy() or {}).get("orders", {}) or {}
+
+
+OUTSIDE_RTH = bool(_orders_cfg().get("outside_rth", True))
+OVERNIGHT = bool(_orders_cfg().get("overnight", True))
+OVERNIGHT_EXCHANGE = _orders_cfg().get("overnight_exchange", "OVERNIGHT")
+
+
+def _session_flags(o):
+    """Apply the fill-hours settings to an order."""
+    o.outsideRth = OUTSIDE_RTH
+    # Newer IBKR APIs take an "include overnight" flag on SMART orders; set it
+    # whenever the installed ib_async exposes the field.
+    if OVERNIGHT and hasattr(o, "includeOvernight"):
+        o.includeOvernight = True
+    return o
+
+
+def route_for_session(ib, contract, orders):
+    """Contract to send `orders` on right now.
+
+    During the overnight session (lib.hours) a SMART order does not trade, so
+    when `orders.overnight` is on and every leg is a limit order, route to the
+    overnight venue (`orders.overnight_exchange`). Stop legs can't trade
+    overnight; such a group stays on SMART and works from the pre-market.
+    """
+    from lib import hours
+    if not (OVERNIGHT and hours.session_at() == "overnight"):
+        return contract
+    if any(o.orderType != "LMT" for o in orders):
+        print(f"[ibkr] overnight session: {contract.symbol} group has a stop leg, "
+              "so it stays on SMART and starts working in the pre-market",
+              file=sys.stderr)
+        return contract
+    if any(hasattr(o, "includeOvernight") for o in orders):
+        return contract                     # SMART + includeOvernight covers it
+    on = Stock(contract.symbol, OVERNIGHT_EXCHANGE, contract.currency or "USD")
+    ib.qualifyContracts(on)
+    print(f"[ibkr] overnight session: routing {contract.symbol} to "
+          f"{OVERNIGHT_EXCHANGE}", file=sys.stderr)
+    return on
 
 
 def _live_allowed():
@@ -71,6 +115,11 @@ def connect(host=HOST, port=DEFAULT_PORT, client_id=CLIENT_ID, readonly=False,
     else:
         print(f"[ibkr] paper account {', '.join(ib.managedAccounts())}",
               file=sys.stderr)
+    try:                                   # keep IBKR's session schedule cached
+        from lib import hours
+        hours.refresh_if_stale(ib)
+    except Exception as e:                 # never block a connection on it
+        print(f"[ibkr] hours refresh skipped: {e!r}", file=sys.stderr)
     return ib
 
 
@@ -162,7 +211,7 @@ def open_orders(ib, settle=1.0, retries=2):
     On this Gateway `ib.openTrades()` frequently comes back EMPTY if read
     immediately — `reqAllOpenOrders()` is async and the response needs a moment
     to populate over the event loop. A single empty read was falsely flagging
-    every position UNPROTECTED (2026-06-12). So: request, wait `settle` seconds,
+    every position UNPROTECTED. So: request, wait `settle` seconds,
     and retry up to `retries` times before trusting an empty result. A genuinely
     flat book still returns [] after the retries.
     """
@@ -200,7 +249,7 @@ def prepare_entry(ib, symbol, action, quantity, entry, stop):
                            orderId=ib.client.getReqId(),
                            parentId=parent.orderId, transmit=False)
     for o in (parent, protective):
-        o.outsideRth = OUTSIDE_RTH
+        _session_flags(o)
     return contract, [parent, protective]
 
 
@@ -218,7 +267,7 @@ def prepare_bracket(ib, symbol, action, quantity, entry, stop, target):
     )
     for o in bracket:
         o.transmit = False
-        o.outsideRth = OUTSIDE_RTH
+        _session_flags(o)
     return contract, list(bracket)
 
 
@@ -302,7 +351,7 @@ def prepare_scaled_bracket(ib, symbol, action, quantity, entry, stop,
         legs.append(StopOrder(exit_action, q2, stop, orderId=rid(),
                               parentId=parent.orderId, transmit=False))
     for o in legs:
-        o.outsideRth = OUTSIDE_RTH
+        _session_flags(o)
     return contract, legs
 
 
@@ -312,7 +361,7 @@ def should_profit_lock(avg_cost, last, atr, min_gain_atr=0.5):
     Guard for the in-profit auto-lock. A position only marginally above cost
     produces a lock stop pinned within a tick of market (profit_lock_stop clamps
     to `last - tick`), which then fires on ANY downtick — converting a live swing
-    into an instant breakeven exit and destroying the thesis. BABA 2026-07-20:
+    into an instant breakeven exit and destroying the thesis. BABA:
     +$3.35 open gain would have set a stop $0.01 under market.
 
     So require the open gain to be at least `min_gain_atr` x ATR before locking.
@@ -353,7 +402,7 @@ def ratchet_lock_oca(ib, symbol, quantity, stop, target, replace_trades=(),
         <exit> quantity LMT  @ target  (chart-resistance target, from lib.indicators.chart_target)
     Both GTC, same ocaGroup, ocaType=1. Because the stop sits at/above average
     cost this only LOCKS IN A GAIN (de-risking), so — like a stop-raise — it is
-    transmitted immediately, no approval (user rule 2026-07-15).
+    transmitted immediately, no approval (user rule).
 
     `replace_trades` = existing open Trade objects for this symbol to cancel first
     (the loose stop/target being superseded). Uses DIRECT GTC placement (not the
@@ -373,7 +422,7 @@ def ratchet_lock_oca(ib, symbol, quantity, stop, target, replace_trades=(),
     # OCA SIBLINGS (no parent chain): both legs must be transmit=True. A held
     # (transmit=False) leg is never released by a sibling's transmit=True — it
     # would sit in PendingSubmit and then drop, leaving the position half-covered
-    # (BABA 2026-07-16: the stop vanished, only the target rested). The ocaGroup
+    # (BABA: the stop vanished, only the target rested). The ocaGroup
     # links them so a fill on one still cancels the other.
     stop_o = StopOrder(exit_action, quantity, stop, orderId=rid(),
                        tif="GTC", ocaGroup=group, ocaType=1, transmit=True)
@@ -390,8 +439,9 @@ def transmit(ib, contract, bracket):
     and the final leg's transmit=True releases every order in the group).
     """
     for o in bracket:
-        o.outsideRth = OUTSIDE_RTH
+        _session_flags(o)
     bracket[-1].transmit = True
+    contract = route_for_session(ib, contract, bracket)
     print(f"[ibkr] transmitting {len(bracket)} order(s) for {contract.symbol} "
-          f"to {account_mode(ib)} account", file=sys.stderr)
+          f"to {account_mode(ib)} account ({contract.exchange})", file=sys.stderr)
     return [ib.placeOrder(contract, o) for o in bracket]
