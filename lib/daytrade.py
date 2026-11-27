@@ -128,7 +128,7 @@ def scan(symbols, spy_pct=None, rth_only_for_or=True):
             # --- LEVEL LADDER + INFLEXION (game-plan-style S/R for real targets) ---
             # Source: multi-day 15-min bars — the granularity that reproduces a
             # hand-drawn game plan's intraday S/R (daily bars give S/R too macro
-            # for a day trade; 2026-08-05 game-plan calibration). max_dist_pct
+            # for a day trade; game-plan calibration). max_dist_pct
             # drops stale far levels.
             supports = []; resistances = []; next_res = None; near_sup = None
             bias = None; inflex = None; rr_to_res = None

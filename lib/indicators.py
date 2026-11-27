@@ -114,7 +114,7 @@ def entry_quality(df, extended_atr=4.0, pullback_atr=2.0):
 
 def reversion_quality(df, drop_atr=2.5, rsi_os=35, lookback_high=60,
                       knife_gate_200=True):
-    """WHEN a beaten-down name is a BUYABLE DIP vs a falling knife (2026-10-20).
+    """WHEN a beaten-down name is a BUYABLE DIP vs a falling knife.
 
     The mean-reversion complement to entry_quality (which buys strength in
     Stage-2 uptrends). Our realized winners — CCL +797, COIN +233, NBIS +100,
@@ -244,7 +244,7 @@ def noise_band(df, mult=1.5, length=14):
 
     A stop placed closer than this to entry will likely be triggered by normal
     intraday wiggle. Use it to (a) reject stops that sit inside the band, and
-    (b) size the minimum stop distance. AMD 2026-06-12 lesson: a $2 stop on a
+    (b) size the minimum stop distance. AMD lesson: a $2 stop on a
     name with $2.5 5-min ATR is inside the noise — it got shaken out before the
     real move. Default 1.5× = enough room for a routine pullback.
     """
@@ -259,7 +259,7 @@ def vwap_trail_stop(df, buffer_atr_mult=1.5):
     primary stop — the ratchet adapts to structure; this only holds while VWAP
     holds as support. Only moves up: caller must enforce the up-only constraint.
 
-    Buffer default is 1.5×ATR (was 0.5×): AMD 2026-06-12 broke VWAP by 1.4×ATR
+    Buffer default is 1.5×ATR (was 0.5×): AMD broke VWAP by 1.4×ATR
     on a flush that immediately reversed and ran higher — a 0.5× buffer exited
     at the worst point. 1.5× survives a normal VWAP undercut.
     """
@@ -275,7 +275,7 @@ def day_trade_stop(df, current_resting_stop=None, vwap_buffer_atr=1.5, lookback=
     """Combined day-trade trailing stop (long). PRIMARY = 2-bar ratchet;
     VWAP-trail is only a FLOOR beneath it. Returns the stop to rest at IBKR.
 
-    Logic (AMD 2026-06-12 retro):
+    Logic (AMD retro):
       1. ratchet = strict-UP 2-bar ratchet (adapts to structure, best performer).
       2. floor   = vwap_trail_stop (VWAP − vwap_buffer_atr×ATR).
       3. candidate = max(ratchet, floor) — the ratchet leads; the VWAP floor only
@@ -397,7 +397,7 @@ def find_resistance(df, lookback=60, tolerance_pct=1.0, min_touches=2,
     — not a heavily-tested level far below that is really old support. The prior
     implementation returned the globally most-touched pivot, which on a trending
     name was a stale level far below price (breakout flags became useless — see
-    journal 2026-06-08). This filters to relevant levels and picks the nearest.
+    journal). This filters to relevant levels and picks the nearest.
 
     A swing-high pivot is a bar whose high is the max of the [-wing, +wing]
     window and which rose into that high (so a flat top counts as one touch, not
@@ -484,7 +484,7 @@ def level_ladder(df, lookback=60, tolerance_pct=1.0, wing=2, n=3,
     resistances ascend from price. This is what lets a day-trade use the NEXT
     resistance as a realistic target (R:R against structure) instead of the day
     high — the fix for the recurring "target too close, R:R < 1" problem
-    (2026-08-05 game-plan analysis). Feed daily bars for multi-day S/R (matches a
+    (game-plan analysis). Feed daily bars for multi-day S/R (matches a
     hand-drawn game plan) or intraday bars for session levels.
     """
     sub = df.tail(lookback).reset_index(drop=True)

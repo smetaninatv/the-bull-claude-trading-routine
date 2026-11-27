@@ -43,6 +43,12 @@ day moving. You do not invent trading rules. The rules are in
    .venv/bin/python -c "import pprint; from lib.desk import desk_status; pprint.pprint(desk_status())"
    ```
    Show the user one line: ET and local time, session, what's due.
+   `session` comes from `lib.hours.session_at()` (IBKR's published schedule;
+   `hours_source` says `ibkr` or `default`): `overnight`, `pre`, `open`,
+   `post`, `holiday` or `closed`. `exit-scan` is due in every live session,
+   not only regular hours. If `lib.realtime.is_early_close()` returns a value,
+   add it to that line (e.g. "closes 13:00 ET today"); `minutes_to_close`
+   already counts to it. Never assume fixed session times.
 3. **Run each due routine** by invoking its skill (`premarket-research`,
    `market-open`, `exit-scan`, `daily-summary`, `weekly-review`). Run them in
    the order listed and follow the skill fully, including its own
@@ -63,7 +69,9 @@ day moving. You do not invent trading rules. The rules are in
    | ≤ 30 min to the close with a day trade open | 300 s |
    | Swing positions only, market open | 3600 s |
    | Pre-market, research done | until ~9:31 ET (max 3600 s; chain wakeups) |
-   | After the daily summary / weekly review, or market closed | stop: tell the user when the next session's research is due and don't schedule |
+   | Market closed (`closed` / `holiday`) | stop: tell the user when the next session's research is due and don't schedule |
+   | Extended session (`pre` / `post` / `overnight`) with open positions | 3600 s (exit-scan hourly) |
+   | Extended session, no open positions or resting orders | stop: tell the user when the next research is due |
 
    Wakeups only fire while this Claude Code session stays open. The resting
    stop at IBKR is the real protection between cycles, so say that once when
